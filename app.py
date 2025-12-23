@@ -15,7 +15,7 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    
+
     header {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -33,24 +33,24 @@ st.markdown("""
         color: #1e1e1e;
     }
 
-    
+
     .stTextInput > div > div > input {
         color: #1e1e1e !important;
         background-color: #ffffff !important;
         caret-color: #1e1e1e !important;
     }
 
-    
+
     .stButton > button {
         color: #ffffff !important;
         background-color: #007bff !important;
     }
 
-    
+
     [data-testid="stMetricValue"] { color: #1e1e1e !important; }
     [data-testid="stMetricLabel"] { color: #555555 !important; }
 
-    
+
     .stMarkdown, p, span, h1, h2, h3 {
         color: #1e1e1e !important;
     }
@@ -59,17 +59,37 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-
 if 'report_data' not in st.session_state:
     st.session_state.report_data = None
 if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = ""
 
 
-
-
 def format_ticker(ticker):
     return ticker.strip().upper()
+
+
+def format_large_number(val):
+    """
+    Formating logic for large numbers:
+    - Trillions: 3 decimals
+    - Billions: 2 decimals
+    - Millions: 2 decimals
+    """
+    if not isinstance(val, (int, float)):
+        return val
+
+    try:
+        abs_val = abs(val)
+        if abs_val >= 1_000_000_000_000:
+            return f"{val / 1_000_000_000_000:.3f} trillion"
+        elif abs_val >= 1_000_000_000:
+            return f"{val / 1_000_000_000:.2f} billion"
+        elif abs_val >= 1_000_000:
+            return f"{val / 1_000_000:.2f} million"
+        return val
+    except:
+        return val
 
 
 def get_insider_sentiment(val_str):
@@ -132,7 +152,7 @@ def fetch_metrics(ticker_symbol):
             ("52 Week Low", info.get('fiftyTwoWeekLow', 'N/A'))
         ]
         for name, val in metrics:
-            yf_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": val})
+            yf_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val)})
 
         # Options Expiration
         options = stock.options
@@ -148,7 +168,6 @@ def fetch_metrics(ticker_symbol):
     except:
         pass
 
-
     try:
         q_bs = stock.quarterly_balance_sheet
         q_is = stock.quarterly_financials
@@ -162,14 +181,18 @@ def fetch_metrics(ticker_symbol):
             cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
 
             yf_rows.append({"Metric Name": "Quarter End Date", "Source": "Yahoo Finance", "Value": str(date)})
-            yf_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance", "Value": assets})
-            yf_rows.append({"Metric Name": "Total Liabilities", "Source": "Yahoo Finance", "Value": liabs})
-            yf_rows.append({"Metric Name": "Cash and Equivalents", "Source": "Yahoo Finance", "Value": float(cash)})
+            yf_rows.append(
+                {"Metric Name": "Total Assets", "Source": "Yahoo Finance", "Value": format_large_number(assets)})
+            yf_rows.append(
+                {"Metric Name": "Total Liabilities", "Source": "Yahoo Finance", "Value": format_large_number(liabs)})
+            yf_rows.append({"Metric Name": "Cash and Equivalents", "Source": "Yahoo Finance",
+                            "Value": format_large_number(float(cash))})
 
             if not q_is.empty:
                 expenses = q_is.iloc[:, 0].get('Operating Expense', q_is.iloc[:, 0].get('Total Operating Expenses', 0))
                 yf_rows.append(
-                    {"Metric Name": "Quarterly Op Expenses", "Source": "Yahoo Finance", "Value": float(expenses)})
+                    {"Metric Name": "Quarterly Op Expenses", "Source": "Yahoo Finance",
+                     "Value": format_large_number(float(expenses))})
 
                 # Derived Ratios
                 try:
@@ -186,20 +209,15 @@ def fetch_metrics(ticker_symbol):
     except:
         pass
 
-
     fv = scrape_finviz(ticker_symbol)
     for k, v in fv.items():
         finviz_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
-
 
     all_data = yf_rows + derived_rows + finviz_rows
     return all_data
 
 
-
-
 def main():
-
     if st.session_state.report_data is None:
 
         st.markdown(
