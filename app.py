@@ -34,7 +34,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- Constants ---
-API_KEY = "AIzaSyDltEXJqAbp7dBbI59g-XEd_Uy479R77tU"  # The environment provides the key at runtime
+API_KEY = st.secrets["API_KEY"] # The environment provides the key at runtime
 MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
 
 
@@ -330,3 +330,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
