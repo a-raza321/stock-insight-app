@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import requests
+import numpy as np
 from bs4 import BeautifulSoup
 import time
 import concurrent.futures
@@ -10,6 +11,7 @@ import os
 import warnings
 from moat_scraper import get_moat_score_selenium
 from sws_scraper import scrape_risk_rewards_sws
+from ceo import get_ceo_ownership
 
 warnings.filterwarnings("ignore")
 st.set_page_config(
@@ -82,7 +84,7 @@ def call_gemini_general(prompt, system_instruction=None, use_search=False):
             if response.status_code == 200:
                 result = response.json()
                 return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text',
-                                                                                                      'N/A').strip()
+                                                                                                     'N/A').strip()
             elif response.status_code == 429:
                 time.sleep(i)
         except:
@@ -194,10 +196,6 @@ def fetch_yfinance_data(ticker):
                 else:
                     all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
 
-        ceo_val = call_gemini_general(f"CEO ownership percentage of {ticker} from Yahoo Finance.",
-                                      system_instruction="Provide ONLY the percentage value.", use_search=True)
-        all_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance", "Value": ceo_val})
-
     except Exception as e:
         st.error(f"Error fetching YFinance data: {e}")
     return all_rows
@@ -211,23 +209,26 @@ def fetch_moat_indicators(ticker):
 
 
 def fetch_all_data_parallel(ticker):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         f_yf = executor.submit(fetch_yfinance_data, ticker)
         f_fv = executor.submit(scrape_finviz, ticker)
         f_moat_score = executor.submit(get_moat_score_selenium, ticker)
         f_sws = executor.submit(scrape_risk_rewards_sws, ticker)
         f_moat_ind = executor.submit(fetch_moat_indicators, ticker)
+        f_ceo = executor.submit(get_ceo_ownership, ticker)
 
         yf_rows = f_yf.result()
         fv_data = f_fv.result()
         moat_score = f_moat_score.result()
         sws_data = f_sws.result()
         moat_indicators = f_moat_ind.result()
+        ceo_val = f_ceo.result()
 
 
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
+    yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance (Scraped)", "Value": ceo_val})
     yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
     return yf_rows, sws_data, moat_indicators
 
