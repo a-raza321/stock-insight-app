@@ -5,15 +5,24 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import concurrent.futures
+import threading
 from datetime import datetime
+import os
+import warnings
+from moat_scraper import get_moat_score_selenium
+from sws_scraper import scrape_risk_rewards_sws
+import ceo
 
-# --- Configuration & Styling ---
+warnings.filterwarnings("ignore")
 st.set_page_config(
     page_title="Stock Insight Pro",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Lock to prevent multiple threads from patching the chromedriver simultaneously
+driver_init_lock = threading.Lock()
 
 st.markdown("""
     <style>
@@ -33,28 +42,26 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Constants ---
-API_KEY = st.secrets["API_KEY"] # The environment provides the key at runtime
+# Improved: Fetching API Key from Streamlit Secrets for Cloud compatibility
+API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
-
-
-# --- Helper Functions ---
 
 def format_ticker(ticker):
     return ticker.strip().upper()
 
 
-def format_large_number(val):
+def format_large_number(val, is_currency=True):
     if not isinstance(val, (int, float)): return val
     try:
         abs_val = abs(val)
+        prefix = "$" if is_currency else ""
         if abs_val >= 1_000_000_000_000:
-            return f"${val / 1_000_000_000_000:.3f}T"
+            return f"{prefix}{val / 1_000_000_000_000:.3f}T"
         elif abs_val >= 1_000_000_000:
-            return f"${val / 1_000_000_000:.2f}B"
+            return f"{prefix}{val / 1_000_000_000:.2f}B"
         elif abs_val >= 1_000_000:
-            return f"${val / 1_000_000:.2f}M"
-        return f"${val:,.2f}"
+            return f"{prefix}{val / 1_000_000:.2f}M"
+        return f"{prefix}{val:,.2f}" if is_currency else f"{val:,.0f}"
     except:
         return val
 
@@ -70,20 +77,11 @@ def get_insider_sentiment(val_str):
         return "N/A"
 
 
-# --- Gemini API Utils ---
-
 def call_gemini_general(prompt, system_instruction=None, use_search=False):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.0}
-    }
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-    if use_search:
-        payload["tools"] = [{"google_search": {}}]
-
-    # Exponential backoff
+    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.0}}
+    if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    if use_search: payload["tools"] = [{"google_search": {}}]
     for i in [1, 2, 4, 8, 16]:
         try:
             response = requests.post(url, json=payload, timeout=30)
@@ -97,8 +95,6 @@ def call_gemini_general(prompt, system_instruction=None, use_search=False):
             time.sleep(i)
     return "N/A"
 
-
-# --- Scrapers ---
 
 def scrape_finviz(ticker):
     url = f"https://finviz.com/quote.ashx?t={ticker}"
@@ -127,164 +123,136 @@ def scrape_finviz(ticker):
         return {}
 
 
-def fetch_moat_score_fast(ticker):
-    """Replaced Selenium with Gemini Search for stability and speed."""
-    prompt = f"Find the current GuruFocus Moat Score for the stock ticker: {ticker}."
-    return call_gemini_general(prompt,
-                               system_instruction="Provide ONLY the numerical score. For example, if the score is 8, just output '8'. Do not include words like 'Moat' or 'Rating'.",
-                               use_search=True)
-
-
-# --- Research Agents ---
-
-def fetch_simply_wall_st_analysis(ticker):
-    prompt = f"""
-    Search Simply Wall St (simplywall.st) for {ticker}.
-    Structure the response into these EXACT sections without emojis:
-
-    Rewards
-    - Key bullet points from Valuation, Growth, and Dividends.
-
-    Risks
-    - Financial health flags and debt analysis.
-
-    Risk/Reward Synthesis
-    - Overall assessment.
-    - Verdict: One-line long-term outlook.
-
-    LEAPS Implications
-    - Dilution, profitability, and volatility impact.
-    """
-    return call_gemini_general(prompt, use_search=True)
-
-
-def fetch_moat_indicators(ticker):
-    prompt = f"Identify 2-4 qualitative economic moat indicators for {ticker} (e.g., Brand, Switching Costs, Network Effect). Based on GuruFocus analysis."
-    return call_gemini_general(prompt,
-                               system_instruction="Output ONLY plain bullet points: - [Heading]: [Description max 10 words]. Do not use markdown bolding.",
-                               use_search=True)
-
-
-# --- Core Data Fetcher ---
-
 def fetch_yfinance_data(ticker):
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
 
-        # Standard Metrics
+
         metrics = [
-            ("Company Name", info.get('longName', ticker)),
-            ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A'))),
-            ("Market Cap", info.get('marketCap', 'N/A')),
-            ("Shares Outstanding", info.get('sharesOutstanding', 'N/A')),
-            ("52 Week High", info.get('fiftyTwoWeekHigh', 'N/A')),
-            ("52 Week Low", info.get('fiftyTwoWeekLow', 'N/A'))
+            ("Company Name", info.get('longName', ticker), False),
+            ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A')), True),
+            ("Market Cap", info.get('marketCap', 'N/A'), True),
+            ("Shares Outstanding", info.get('sharesOutstanding', 'N/A'), False),
+            ("52 Week High", info.get('fiftyTwoWeekHigh', 'N/A'), True),
+            ("52 Week Low", info.get('fiftyTwoWeekLow', 'N/A'), True)
         ]
-        for name, val in metrics:
-            all_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val)})
+        for name, val, is_curr in metrics:
+            all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
+                             "Value": format_large_number(val, is_currency=is_curr)})
 
-        # Ownership
+
         total_insider = info.get('heldPercentInsiders')
-        insider_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
-        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": insider_val})
+        ins_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
+        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
-        # Latest Options Expiration
-        options = stock.options
-        all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance",
-                         "Value": options[-1] if options else "N/A"})
 
-        # Financials
+        try:
+            opts = stock.options
+            all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance",
+                             "Value": opts[-1] if opts else "N/A"})
+        except:
+            all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": "N/A"})
+
+        # Financial Statements
         q_bs = stock.quarterly_balance_sheet
         q_cf = stock.quarterly_cashflow
         q_is = stock.quarterly_financials
 
         if not q_bs.empty:
             bs = q_bs.iloc[:, 0]
-
-            # Specific requested metrics
             total_assets = bs.get('Total Assets', 0)
             total_liabilities = bs.get('Total Liabilities Net Minority Interest', bs.get('Total Liabilities', 0))
             cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
 
             all_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(total_assets))})
+                             "Value": format_large_number(float(total_assets), True)})
             all_rows.append({"Metric Name": "Total Liabilities", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(total_liabilities))})
+                             "Value": format_large_number(float(total_liabilities), True)})
 
-            # Assets / Liabilities Ratio
             if total_liabilities and total_liabilities != 0:
                 al_ratio = round(float(total_assets) / float(total_liabilities), 2)
                 all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": al_ratio})
 
             all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(cash))})
+                             "Value": format_large_number(float(cash), True)})
 
-            # Operating Expenses (Quarterly)
+
             if not q_is.empty:
                 is_data = q_is.iloc[:, 0]
-                op_expenses = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
+                op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
                 all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance",
-                                 "Value": format_large_number(float(op_expenses))})
+                                 "Value": format_large_number(float(op_exp), True)})
 
-            # Calculate Runway
+
             if not q_cf.empty:
-                op_cash_flow = 0
+                op_cash = 0
                 for key in ['Total Cash From Operating Activities', 'Operating Cash Flow',
                             'Cash Flow From Continuing Operating Activities']:
                     if key in q_cf.index:
-                        op_cash_flow = q_cf.loc[key].iloc[0]
+                        op_cash = q_cf.loc[key].iloc[0]
                         break
-                if op_cash_flow < 0:
-                    monthly_burn = abs(float(op_cash_flow)) / 3
+                if op_cash < 0:
+                    monthly_burn = abs(float(op_cash)) / 3
                     runway = round(float(cash) / monthly_burn, 1) if monthly_burn > 0 else 0
                     all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": f"{runway} months"})
                 else:
                     all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
-
-        # CEO Ownership via Search
-        ceo_val = call_gemini_general(f"CEO ownership percentage of {ticker} from Yahoo Finance.",
-                                      system_instruction="Provide ONLY the percentage value.", use_search=True)
-        all_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance", "Value": ceo_val})
 
     except Exception as e:
         st.error(f"Error fetching YFinance data: {e}")
     return all_rows
 
 
+def fetch_moat_indicators(ticker):
+    prompt = f"Identify 2-4 qualitative economic moat indicators for {ticker} (Brand, Switching Costs, Network Effect) based on GuruFocus."
+    return call_gemini_general(prompt,
+                               system_instruction="Output ONLY plain bullet points: - [Heading]: [Description max 10 words].",
+                               use_search=True)
+
+def safe_run_ceo(ticker):
+    """Wrapper to handle the WinError 183 race condition by locking driver creation."""
+    with driver_init_lock:
+        return ceo.run_process(ticker)
+
+def safe_run_moat(ticker):
+    """Wrapper to handle the WinError 183 race condition by locking driver creation."""
+    with driver_init_lock:
+        return get_moat_score_selenium(ticker)
+
+def safe_run_sws(ticker):
+    """Wrapper to handle the WinError 183 race condition by locking driver creation."""
+    with driver_init_lock:
+        return scrape_risk_rewards_sws(ticker)
+
 def fetch_all_data_parallel(ticker):
-    # Use ThreadPoolExecutor for concurrent execution
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # Submit all tasks
-        future_yf = executor.submit(fetch_yfinance_data, ticker)
-        future_fv = executor.submit(scrape_finviz, ticker)
-        future_moat_score = executor.submit(fetch_moat_score_fast, ticker)
-        future_sws = executor.submit(fetch_simply_wall_st_analysis, ticker)
-        future_moat_ind = executor.submit(fetch_moat_indicators, ticker)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        f_yf = executor.submit(fetch_yfinance_data, ticker)
+        f_fv = executor.submit(scrape_finviz, ticker)
+        f_moat_score = executor.submit(safe_run_moat, ticker)
+        f_sws = executor.submit(safe_run_sws, ticker)
+        f_moat_ind = executor.submit(fetch_moat_indicators, ticker)
+        f_ceo = executor.submit(safe_run_ceo, ticker)
 
-        # Collect results
-        yf_rows = future_yf.result()
-        fv_data = future_fv.result()
-        moat_score = future_moat_score.result()
-        sws_report = future_sws.result()
-        moat_indicators = future_moat_ind.result()
+        yf_rows = f_yf.result()
+        fv_data = f_fv.result()
+        moat_score = f_moat_score.result()
+        sws_data = f_sws.result()
+        moat_indicators = f_moat_ind.result()
+        ceo_val = f_ceo.result()
 
-    # Merge Finviz and Moat Score into the metrics list
+
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
-    yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus", "Value": moat_score})
+    yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance (Scraped)", "Value": ceo_val})
+    yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
+    return yf_rows, sws_data, moat_indicators
 
-    return yf_rows, sws_report, moat_indicators
-
-
-# --- UI Layout ---
 
 def main():
-    if 'report_data' not in st.session_state:
-        st.session_state.report_data = None
-
+    if 'report_data' not in st.session_state: st.session_state.report_data = None
     if st.session_state.report_data is None:
         st.markdown(
             '<div class="main-header"><h1>Stock Insight Pro</h1><p>Institutional-Grade Stock Analysis</p></div>',
@@ -293,10 +261,9 @@ def main():
         with center_col:
             ticker_input = st.text_input("Ticker", placeholder="e.g. TSLA, NVDA", key="ticker_box",
                                          label_visibility="collapsed")
-            generate_btn = st.button("Generate Comprehensive Report")
-            if generate_btn and ticker_input:
+            if st.button("Generate Comprehensive Report") and ticker_input:
                 ticker = format_ticker(ticker_input)
-                with st.spinner(f"Running Parallel Analysis for {ticker}..."):
+                with st.spinner(f"Running Parallel Scrapers for {ticker}..."):
                     metrics, sws, moat = fetch_all_data_parallel(ticker)
                     st.session_state.report_data = metrics
                     st.session_state.sws_report = sws
@@ -305,23 +272,33 @@ def main():
                     st.rerun()
     else:
         col_title, col_reset = st.columns([8, 2])
-        with col_title:
-            st.title(f"📊 {st.session_state.current_ticker} Report")
-        with col_reset:
-            if st.button("New Analysis"):
-                st.session_state.report_data = None
-                st.rerun()
+        col_title.title(f"📊 {st.session_state.current_ticker} Report")
+        if col_reset.button("New Analysis"):
+            st.session_state.report_data = None
+            st.rerun()
 
         tab1, tab2, tab3 = st.tabs(["Metrics & Financials", "Risk & Reward Analysis", "Moat Indicators"])
-
         with tab1:
             st.subheader("Consolidated Market Data")
-            df = pd.DataFrame(st.session_state.report_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            if st.session_state.report_data:
+                df = pd.DataFrame(st.session_state.report_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No metric data found.")
 
         with tab2:
-            st.subheader("Simply Wall St: Deep Analysis")
-            st.markdown(f'<div class="report-card">{st.session_state.sws_report}</div>', unsafe_allow_html=True)
+            st.subheader("Simply Wall St: Scraped Risk/Reward Analysis")
+            sws = st.session_state.sws_report
+            if sws and (sws.get('rewards') or sws.get('risks')):
+                content = f"**{sws.get('company', st.session_state.current_ticker)} Analysis**\n\n### Rewards\n"
+                content += "\n".join([f"- {r}" for r in sws.get('rewards', [])]) if sws.get(
+                    'rewards') else "- No rewards found"
+                content += "\n\n### Risks\n"
+                content += "\n".join([f"- {r}" for r in sws.get('risks', [])]) if sws.get(
+                    'risks') else "- No risks found"
+                st.markdown(f'<div class="report-card">{content}</div>', unsafe_allow_html=True)
+            else:
+                st.info("Simply Wall St data unavailable or search failed.")
 
         with tab3:
             st.subheader("GuruFocus: Qualitative Moat Indicators")
@@ -330,4 +307,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
