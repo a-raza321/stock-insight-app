@@ -13,9 +13,21 @@ warnings.filterwarnings("ignore")
 os.environ["WDM_LOG_LEVEL"] = "0"
 
 
-def scrape_ceo_data(company):
-    company = company.upper()
+def get_ceo_ownership(ticker):
+    ticker = ticker.upper()
 
+    # 1. Get Shares Outstanding using yfinance
+    shares_outstanding = None
+    try:
+        stock = yf.Ticker(ticker)
+        shares_outstanding = stock.info.get('sharesOutstanding')
+    except:
+        pass
+
+    if not shares_outstanding:
+        return "N/A"
+
+    # 2. Scrape CEO Shares Owned using the provided logic
     options = uc.ChromeOptions()
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--headless")
@@ -25,7 +37,7 @@ def scrape_ceo_data(company):
     options.add_argument("--log-level=3")
 
     driver = None
-    ceo_shares_count = None  # Variable to store the numeric value for calculation
+    ceo_shares_owned = None
 
     try:
         driver = uc.Chrome(options=options, suppress_welcome=True)
@@ -37,7 +49,7 @@ def scrape_ceo_data(company):
         # ---------------- SEARCH COMPANY ----------------
         search = wait.until(EC.presence_of_element_located((By.ID, "ybar-sbq")))
         search.clear()
-        search.send_keys(company)
+        search.send_keys(ticker)
         search.submit()
         time.sleep(2)
 
@@ -59,7 +71,7 @@ def scrape_ceo_data(company):
             driver.execute_script("arguments[0].click();", insider_tab)
             time.sleep(2)
         except TimeoutException:
-            driver.get(f"https://finance.yahoo.com/quote/{company}/insider-roster")
+            driver.get(f"https://finance.yahoo.com/quote/{ticker}/insider-roster")
             time.sleep(2)
 
         # ---------------- SCROLL ----------------
@@ -83,37 +95,29 @@ def scrape_ceo_data(company):
                 title = full_text.replace(name, "").strip()
 
                 if "Chief Executive Officer" in title:
-                    shares = cols[3].text.strip()
-                    if shares == "--" or not shares:
-                        shares = "Not Available"
-                    else:
-                        # Clean the string to convert it to a float for calculation
+                    shares_str = cols[3].text.strip().replace(",", "")
+                    if shares_str and shares_str != "--":
                         try:
-                            ceo_shares_count = float(shares.replace(',', ''))
+                            ceo_shares_owned = float(shares_str)
+                            break
                         except ValueError:
-                            ceo_shares_count = None
-
-                    return calculate_ownership(company, ceo_shares_count)
-
+                            pass
         except TimeoutException:
             pass
 
-        # ---------------- PROFILE PAGE FALLBACK ----------------
-        driver.get(f"https://finance.yahoo.com/quote/{company}/profile")
-        time.sleep(2)
-
-        rows = driver.find_elements(By.XPATH, "//section//table//tbody/tr")
-        for row in rows:
-            cols = row.find_elements(By.TAG_NAME, "td")
-            if len(cols) < 2:
-                continue
-
-            name = cols[0].text.strip()
-            title = cols[1].text.strip()
-            if "Chief Executive Officer" in title:
-                return calculate_ownership(company, None)
-
-        return "N/A"
+        # ---------------- PROFILE PAGE FALLBACK (If shares not in roster) ----------------
+        if ceo_shares_owned is None:
+            driver.get(f"https://finance.yahoo.com/quote/{ticker}/profile")
+            time.sleep(2)
+            rows = driver.find_elements(By.XPATH, "//section//table//tbody/tr")
+            for row in rows:
+                cols = row.find_elements(By.TAG_NAME, "td")
+                if len(cols) < 2: continue
+                title = cols[1].text.strip()
+                if "Chief Executive Officer" in title:
+                    # Note: Profile page usually doesn't show share count,
+                    # but we keep the navigation logic as requested.
+                    break
 
     finally:
         if driver:
@@ -122,36 +126,19 @@ def scrape_ceo_data(company):
             except:
                 pass
 
+    # 3. Calculate Percentage
+    if ceo_shares_owned is not None and shares_outstanding:
+        percentage = (ceo_shares_owned / shares_outstanding) * 100
+        return f"{percentage:.4f}%"
 
-def calculate_ownership(ticker, ceo_shares):
-    """
-    Calculates ownership percentage: (CEO Shares / Shares Outstanding) * 100
-    """
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        shares_outstanding = info.get('sharesOutstanding')
-
-        if shares_outstanding and ceo_shares:
-            percentage = (ceo_shares / shares_outstanding) * 100
-            return f"{percentage:.4f}%"
-        else:
-            return "N/A"
-    except Exception:
-        return "N/A"
-
-
-# TICKER RECEPTION: Called from app.py
-def run_process(ticker_from_app):
-    if ticker_from_app:
-        # Pass the ticker from app.py into the scrape function and return result
-        return scrape_ceo_data(ticker_from_app)
     return "N/A"
 
 
 if __name__ == "__main__":
-    company = input("Enter company name or ticker: ").strip()
-    if company:
-        print(run_process(company))
+    ticker_input = input("Enter ticker: ").strip()
+    if ticker_input:
+        print(get_ceo_ownership(ticker_input))
+    else:
+        print("N/A")
 
     sys.stderr = open(os.devnull, 'w')
