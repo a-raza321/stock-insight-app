@@ -42,8 +42,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Improved: Fetching API Key from Streamlit Secrets for Cloud compatibility
-API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+API_KEY = ""
 MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
 
 def format_ticker(ticker):
