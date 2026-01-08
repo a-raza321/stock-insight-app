@@ -47,7 +47,8 @@ def format_ticker(ticker):
 
 
 def format_large_number(val, is_currency=True):
-    if not isinstance(val, (int, float)): return val
+    if val is None or val == "N/A": return "N/A"
+    if not isinstance(val, (int, float)): return str(val)
     try:
         abs_val = abs(val)
         prefix = "$" if is_currency else ""
@@ -59,7 +60,7 @@ def format_large_number(val, is_currency=True):
             return f"{prefix}{val / 1_000_000:.2f}M"
         return f"{prefix}{val:,.2f}" if is_currency else f"{val:,.0f}"
     except:
-        return val
+        return str(val)
 
 
 def get_insider_sentiment(val_str):
@@ -83,8 +84,7 @@ def call_gemini_general(prompt, system_instruction=None, use_search=False):
             response = requests.post(url, json=payload, timeout=30)
             if response.status_code == 200:
                 result = response.json()
-                return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text',
-                                                                                                     'N/A').strip()
+                return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', 'N/A').strip()
             elif response.status_code == 429:
                 time.sleep(i)
         except:
@@ -125,7 +125,7 @@ def fetch_yfinance_data(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info
 
-
+        # Market Data
         metrics = [
             ("Company Name", info.get('longName', ticker), False),
             ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A')), True),
@@ -138,12 +138,12 @@ def fetch_yfinance_data(ticker):
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
                              "Value": format_large_number(val, is_currency=is_curr)})
 
-
+        # Ownership Data
         total_insider = info.get('heldPercentInsiders')
         ins_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
-
+        # Options Data
         try:
             opts = stock.options
             all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance",
@@ -151,53 +151,50 @@ def fetch_yfinance_data(ticker):
         except:
             all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": "N/A"})
 
-        # Financial Statements
-        q_bs = stock.quarterly_balance_sheet
-        q_cf = stock.quarterly_cashflow
-        q_is = stock.quarterly_financials
+        # Financial Statements Logic
+        try:
+            q_bs = stock.quarterly_balance_sheet
+            q_cf = stock.quarterly_cashflow
+            q_is = stock.quarterly_financials
 
-        if not q_bs.empty:
-            bs = q_bs.iloc[:, 0]
-            total_assets = bs.get('Total Assets', 0)
-            total_liabilities = bs.get('Total Liabilities Net Minority Interest', bs.get('Total Liabilities', 0))
-            cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
+            if not q_bs.empty:
+                bs = q_bs.iloc[:, 0]
+                total_assets = bs.get('Total Assets', 0)
+                total_liabilities = bs.get('Total Liabilities Net Minority Interest', bs.get('Total Liabilities', 0))
+                cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
 
-            all_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(total_assets), True)})
-            all_rows.append({"Metric Name": "Total Liabilities", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(total_liabilities), True)})
+                all_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance", "Value": format_large_number(float(total_assets), True)})
+                all_rows.append({"Metric Name": "Total Liabilities", "Source": "Yahoo Finance", "Value": format_large_number(float(total_liabilities), True)})
 
-            if total_liabilities and total_liabilities != 0:
-                al_ratio = round(float(total_assets) / float(total_liabilities), 2)
-                all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": al_ratio})
+                if total_liabilities and float(total_liabilities) != 0:
+                    al_ratio = round(float(total_assets) / float(total_liabilities), 2)
+                    all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": al_ratio})
 
-            all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(cash), True)})
+                all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance", "Value": format_large_number(float(cash), True)})
 
+                if not q_is.empty:
+                    is_data = q_is.iloc[:, 0]
+                    op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
+                    all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance", "Value": format_large_number(float(op_exp), True)})
 
-            if not q_is.empty:
-                is_data = q_is.iloc[:, 0]
-                op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
-                all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance",
-                                 "Value": format_large_number(float(op_exp), True)})
-
-
-            if not q_cf.empty:
-                op_cash = 0
-                for key in ['Total Cash From Operating Activities', 'Operating Cash Flow',
-                            'Cash Flow From Continuing Operating Activities']:
-                    if key in q_cf.index:
-                        op_cash = q_cf.loc[key].iloc[0]
-                        break
-                if op_cash < 0:
-                    monthly_burn = abs(float(op_cash)) / 3
-                    runway = round(float(cash) / monthly_burn, 1) if monthly_burn > 0 else 0
-                    all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": f"{runway} months"})
-                else:
-                    all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
+                if not q_cf.empty:
+                    op_cash = 0
+                    for key in ['Total Cash From Operating Activities', 'Operating Cash Flow', 'Cash Flow From Continuing Operating Activities', 'Net Cash Provided By Operating Activities']:
+                        if key in q_cf.index:
+                            op_cash = q_cf.loc[key].iloc[0]
+                            break
+                    
+                    if op_cash < 0:
+                        monthly_burn = abs(float(op_cash)) / 3
+                        runway = round(float(cash) / monthly_burn, 1) if monthly_burn > 0 else 0
+                        all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": f"{runway} months"})
+                    else:
+                        all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
+        except Exception as e:
+            all_rows.append({"Metric Name": "Financial Data", "Source": "Yahoo Finance", "Value": "Incomplete (API Limit)"})
 
     except Exception as e:
-        st.error(f"Error fetching YFinance data: {e}")
+        st.error(f"Critical error with yfinance: {e}")
     return all_rows
 
 
@@ -224,12 +221,15 @@ def fetch_all_data_parallel(ticker):
         moat_indicators = f_moat_ind.result()
         ceo_val = f_ceo.result()
 
+    # Merge Finviz data
+    if fv_data:
+        for k, v in fv_data.items():
+            yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
-    for k, v in fv_data.items():
-        yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
-
-    yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance (Scraped)", "Value": ceo_val})
-    yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
+    # Add Scraped metrics
+    yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance (Scraped)", "Value": ceo_val if ceo_val else "N/A"})
+    yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score if moat_score else "N/A"})
+    
     return yf_rows, sws_data, moat_indicators
 
 
@@ -273,18 +273,19 @@ def main():
             sws = st.session_state.sws_report
             if sws and (sws.get('rewards') or sws.get('risks')):
                 content = f"**{sws.get('company', st.session_state.current_ticker)} Analysis**\n\n### Rewards\n"
-                content += "\n".join([f"- {r}" for r in sws.get('rewards', [])]) if sws.get(
-                    'rewards') else "- No rewards found"
+                content += "\n".join([f"- {r}" for r in sws.get('rewards', [])]) if sws.get('rewards') else "- No rewards found"
                 content += "\n\n### Risks\n"
-                content += "\n".join([f"- {r}" for r in sws.get('risks', [])]) if sws.get(
-                    'risks') else "- No risks found"
+                content += "\n".join([f"- {r}" for r in sws.get('risks', [])]) if sws.get('risks') else "- No risks found"
                 st.markdown(f'<div class="report-card">{content}</div>', unsafe_allow_html=True)
             else:
                 st.info("Simply Wall St data unavailable or search failed.")
 
         with tab3:
             st.subheader("GuruFocus: Qualitative Moat Indicators")
-            st.markdown(f'<div class="report-card">{st.session_state.moat_report}</div>', unsafe_allow_html=True)
+            if st.session_state.moat_report:
+                st.markdown(f'<div class="report-card">{st.session_state.moat_report}</div>', unsafe_allow_html=True)
+            else:
+                st.info("Moat indicator analysis unavailable.")
 
 
 if __name__ == "__main__":
