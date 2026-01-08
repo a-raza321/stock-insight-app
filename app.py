@@ -5,13 +5,11 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import concurrent.futures
-import threading
 from datetime import datetime
 import os
 import warnings
 from moat_scraper import get_moat_score_selenium
 from sws_scraper import scrape_risk_rewards_sws
-import ceo
 
 warnings.filterwarnings("ignore")
 st.set_page_config(
@@ -20,9 +18,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-# Lock to prevent multiple threads from patching the chromedriver simultaneously
-driver_init_lock = threading.Lock()
 
 st.markdown("""
     <style>
@@ -199,6 +194,10 @@ def fetch_yfinance_data(ticker):
                 else:
                     all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
 
+        ceo_val = call_gemini_general(f"CEO ownership percentage of {ticker} from Yahoo Finance.",
+                                      system_instruction="Provide ONLY the percentage value.", use_search=True)
+        all_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance", "Value": ceo_val})
+
     except Exception as e:
         st.error(f"Error fetching YFinance data: {e}")
     return all_rows
@@ -210,42 +209,25 @@ def fetch_moat_indicators(ticker):
                                system_instruction="Output ONLY plain bullet points: - [Heading]: [Description max 10 words].",
                                use_search=True)
 
-def safe_run_ceo(ticker):
-    """Wrapper to handle the WinError 183 race condition by locking driver creation."""
-    with driver_init_lock:
-        return ceo.run_process(ticker)
-
-def safe_run_moat(ticker):
-    """Wrapper to handle the WinError 183 race condition by locking driver creation."""
-    with driver_init_lock:
-        return get_moat_score_selenium(ticker)
-
-def safe_run_sws(ticker):
-    """Wrapper to handle the WinError 183 race condition by locking driver creation."""
-    with driver_init_lock:
-        return scrape_risk_rewards_sws(ticker)
 
 def fetch_all_data_parallel(ticker):
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         f_yf = executor.submit(fetch_yfinance_data, ticker)
         f_fv = executor.submit(scrape_finviz, ticker)
-        f_moat_score = executor.submit(safe_run_moat, ticker)
-        f_sws = executor.submit(safe_run_sws, ticker)
+        f_moat_score = executor.submit(get_moat_score_selenium, ticker)
+        f_sws = executor.submit(scrape_risk_rewards_sws, ticker)
         f_moat_ind = executor.submit(fetch_moat_indicators, ticker)
-        f_ceo = executor.submit(safe_run_ceo, ticker)
 
         yf_rows = f_yf.result()
         fv_data = f_fv.result()
         moat_score = f_moat_score.result()
         sws_data = f_sws.result()
         moat_indicators = f_moat_ind.result()
-        ceo_val = f_ceo.result()
 
 
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
-    yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance (Scraped)", "Value": ceo_val})
     yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
     return yf_rows, sws_data, moat_indicators
 
