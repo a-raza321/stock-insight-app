@@ -19,22 +19,17 @@ sys.stderr = open(os.devnull, 'w')
 def search_company(driver, company_name):
     """Search for company and return the correct URL"""
     try:
-
         driver.get("https://simplywall.st/")
-
 
         search_box = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.XPATH, "//input[@name='search-search-field']"))
         )
 
-
         search_box.click()
         search_box.clear()
         search_box.send_keys(company_name)
 
-
         time.sleep(2.5)
-
 
         try:
             first_suggestion = WebDriverWait(driver, 8).until(
@@ -55,7 +50,6 @@ def search_company(driver, company_name):
 
         first_suggestion.click()
 
-
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "h1"))
         )
@@ -67,9 +61,14 @@ def search_company(driver, company_name):
 
 def scrape_risk_rewards_sws(company_name):
     options = uc.ChromeOptions()
-    options.add_argument('--headless=new')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
+    
+    # REQUIRED CLOUD SETTINGS
+    options.add_argument('--headless=new')  # Essential for Streamlit Cloud
+    options.add_argument('--no-sandbox')    # Essential for Linux/Container environments
+    options.add_argument('--disable-dev-shm-usage') # Prevents crashes due to limited memory in /dev/shm
+    options.add_argument('--disable-gpu')   # Recommended for headless mode
+    
+    # ANTI-BOT SETTINGS
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument(
         '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
@@ -78,7 +77,6 @@ def scrape_risk_rewards_sws(company_name):
     options.add_argument('--disable-images')
     options.add_argument('--blink-settings=imagesEnabled=false')
     options.add_argument('--disable-extensions')
-    options.add_argument('--disable-gpu')
     options.page_load_strategy = 'eager'
 
     # Streamlit Cloud workaround: Use temporary directory for user data
@@ -87,24 +85,34 @@ def scrape_risk_rewards_sws(company_name):
 
     # Detect Chromium binary for Streamlit Cloud
     chrome_path = None
-    if os.path.exists("/usr/bin/chromium"):
-        chrome_path = "/usr/bin/chromium"
-    elif os.path.exists("/usr/bin/chromium-browser"):
-        chrome_path = "/usr/bin/chromium-browser"
+    # Check common paths for Chromium in Streamlit/Debian environments
+    possible_paths = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/lib/chromium-browser/chromium-browser"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            chrome_path = path
+            break
 
-    # Fix for TypeError: Pass browser_executable_path directly to constructor
-    # instead of setting options.binary_location
-    driver = uc.Chrome(
-        options=options,
-        browser_executable_path=chrome_path,
-        use_subprocess=False
-    )
+    try:
+        # Initialize driver with specific cloud-friendly configuration
+        driver = uc.Chrome(
+            options=options,
+            browser_executable_path=chrome_path,
+            use_subprocess=True, # Recommended for cloud environments to avoid zombie processes
+            headless=True        # Explicitly set headless in the constructor for UC
+        )
+    except Exception as e:
+        # Fallback if specific binary fails
+        driver = uc.Chrome(options=options, headless=True)
+
     wait = WebDriverWait(driver, 15)
-
     data = {"company": "", "rewards": [], "risks": []}
 
     try:
-
         url = search_company(driver, company_name)
 
         if not url:
@@ -112,10 +120,8 @@ def scrape_risk_rewards_sws(company_name):
             sys.stdout.flush()
             return data
 
-
         time.sleep(1)
         driver.execute_script("window.scrollBy(0, 800)")
-
 
         try:
             data["company"] = wait.until(
@@ -124,7 +130,6 @@ def scrape_risk_rewards_sws(company_name):
         except:
             pass
 
-
         try:
             WebDriverWait(driver, 8).until(
                 EC.presence_of_element_located((By.XPATH, "//blockquote//a | //div[contains(@class, 'highlight')]//a"))
@@ -132,59 +137,39 @@ def scrape_risk_rewards_sws(company_name):
         except:
             pass
 
-
         all_links = driver.find_elements(By.XPATH, "//blockquote//a | //div[contains(@class, 'highlight')]//a")
 
-
         risk_keywords = [
-
             "debt", "leverage", "liabilities", "borrowing", "owe",
-
             "unprofitable", "loss", "losses", "negative earnings", "negative income",
             "negative cash", "burn rate", "cash burn", "non-cash earnings",
-
             "volatile", "volatility", "unstable", "fluctuat", "swing",
-
             "dilut", "shares issued", "share count increased",
-
             "insider selling", "insiders sold", "directors sold", "insider",
-
             "decline", "declining", "decreased", "fell", "dropped", "falling",
             "underperform", "miss", "below expectation",
-
             "one-off", "unusual items", "non-recurring", "impacting financial",
             "restatement", "writedown", "impairment", "non-cash",
-
             "lawsuit", "litigation", "investigation", "regulatory",
             "competition", "market share loss",
-
             "risk", "concern", "warning", "challenge", "pressure", "threat",
             "weakness", "problem", "issue", "difficulty"
         ]
 
-
         reward_keywords = [
-
             "growth", "grew", "growing", "grow", "increase", "increased", "increasing",
             "expansion", "expand",
-
             "earnings", "profit", "profitable", "became profitable", "margin",
             "revenue", "sales",
-
             "forecast", "expect", "projected", "estimate", "analysts",
             "guidance", "outlook",
-
             "undervalued", "good value", "fair value", "trading below",
             "discount", "attractive", "cheap", "bargain",
-
             "outperform", "beat", "exceeded", "surpass", "strong",
             "robust", "solid", "positive", "improving", "recovered",
-
             "dividend", "yield", "buyback", "shareholder return",
-
             "market leader", "competitive advantage", "market share gain",
             "innovation", "new product",
-
             "compared to peers", "better than", "above average", "leading"
         ]
 
@@ -194,8 +179,6 @@ def scrape_risk_rewards_sws(company_name):
                 continue
 
             text_lower = text.lower()
-
-
             is_risk = any(keyword in text_lower for keyword in risk_keywords)
             is_reward = any(keyword in text_lower for keyword in reward_keywords)
 
@@ -207,16 +190,10 @@ def scrape_risk_rewards_sws(company_name):
                     data["rewards"].append(text)
 
     finally:
-
         try:
             driver.quit()
         except:
             pass
-        try:
-            driver.service.stop()
-        except:
-            pass
-
 
     sys.stdout.write(f"\nCompany: {data['company']}\n\n")
     sys.stdout.write("Rewards:\n")
@@ -234,13 +211,12 @@ def scrape_risk_rewards_sws(company_name):
         sys.stdout.write("- No risks found\n")
 
     sys.stdout.flush()
-
     return data
 
 
 def get_gemini_analysis(data):
     """Analyses the scraped risks and rewards using Gemini API"""
-    api_key = ""
+    api_key = "" # Execution environment provides this at runtime
     model = "gemini-2.5-flash-preview-09-2025"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
@@ -264,7 +240,6 @@ def get_gemini_analysis(data):
         "contents": [{"parts": [{"text": prompt}]}]
     }
 
-
     for delay in [1, 2, 4, 8, 16]:
         try:
             response = requests.post(url, json=payload, timeout=30)
@@ -280,18 +255,13 @@ def get_gemini_analysis(data):
 
 
 if __name__ == "__main__":
-
     sys.stderr.close()
     sys.stderr = sys.__stderr__
 
     company_name = input("Enter company name (e.g., Apple, Tesla, NVIDIA, Microsoft): ").strip()
-
-
     sys.stderr = open(os.devnull, 'w')
 
-
     scraped_data = scrape_risk_rewards_sws(company_name)
-
 
     if scraped_data.get("company"):
         sys.stdout.write("\n" + "=" * 30 + "\n")
