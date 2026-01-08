@@ -8,84 +8,67 @@ import sys
 import os
 import time
 import yfinance as yf
-import tempfile
 
 warnings.filterwarnings("ignore")
 os.environ["WDM_LOG_LEVEL"] = "0"
+
 
 def scrape_ceo_data(company):
     company = company.upper()
 
     options = uc.ChromeOptions()
+    options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--log-level=3")
-    options.add_argument("--window-size=1920,1080")
-    
-    # Streamlit Cloud workaround: Use a temporary directory for user data
-    tmp_dir = tempfile.mkdtemp()
-    options.add_argument(f"--user-data-dir={tmp_dir}")
 
     driver = None
-    ceo_shares_count = None
+    ceo_shares_count = None  # Variable to store the numeric value for calculation
 
     try:
-        # Detect Chromium binary path for Streamlit Cloud
-        chrome_path = None
-        if os.path.exists("/usr/bin/chromium"):
-            chrome_path = "/usr/bin/chromium"
-        elif os.path.exists("/usr/bin/chromium-browser"):
-            chrome_path = "/usr/bin/chromium-browser"
+        driver = uc.Chrome(options=options, suppress_welcome=True)
+        wait = WebDriverWait(driver, 10)
 
-        # Initialize the Chrome driver using the previous uc approach
-        # Note: use_subprocess=False and a specific browser_executable_path are key for Cloud
-        driver = uc.Chrome(
-            options=options, 
-            browser_executable_path=chrome_path,
-            suppress_welcome=True,
-            use_subprocess=False,
-            headless=True
-        )
-        
-        wait = WebDriverWait(driver, 15) 
-
-        # Step 1: Search Company
         driver.get("https://finance.yahoo.com/")
-        time.sleep(2)
+        time.sleep(1)
 
-        try:
-            consent_button = driver.find_elements(By.XPATH, "//button[@name='agree']|//button[contains(@class,'btn-primary')]")
-            if consent_button:
-                consent_button[0].click()
-                time.sleep(1)
-        except:
-            pass
-
+        # ---------------- SEARCH COMPANY ----------------
         search = wait.until(EC.presence_of_element_located((By.ID, "ybar-sbq")))
         search.clear()
         search.send_keys(company)
         search.submit()
-        time.sleep(3)
+        time.sleep(2)
 
-        # Step 2: Navigate to Insider Roster directly
-        current_url = driver.current_url.split('?')[0]
-        if "/quote/" in current_url:
-            ticker_from_url = current_url.split("/quote/")[1].split("/")[0]
-            insider_url = f"https://finance.yahoo.com/quote/{ticker_from_url}/insider-roster"
-            driver.get(insider_url)
-        else:
-            driver.get(f"https://finance.yahoo.com/quote/{company}/insider-roster")
-            
-        time.sleep(3)
-
-        # Step 3: Scrape Insider Table
+        # ---------------- CLICK HOLDERS TAB ----------------
         try:
-            driver.execute_script("window.scrollBy(0, 1000);")
+            holders_tab = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//span[normalize-space()='Holders']"))
+            )
+            holders_tab.click()
             time.sleep(1)
-            
+        except TimeoutException:
+            pass
+
+        # ---------------- CLICK INSIDER ROSTER TAB ----------------
+        try:
+            insider_tab = wait.until(
+                EC.element_to_be_clickable((By.XPATH, "//span[contains(text(),'Insider Roster')]"))
+            )
+            driver.execute_script("arguments[0].click();", insider_tab)
+            time.sleep(2)
+        except TimeoutException:
+            driver.get(f"https://finance.yahoo.com/quote/{company}/insider-roster")
+            time.sleep(2)
+
+        # ---------------- SCROLL ----------------
+        for _ in range(6):
+            driver.execute_script("window.scrollBy(0, 700);")
+            time.sleep(0.3)
+
+        # ---------------- SCRAPE INSIDER TABLE ----------------
+        try:
             tbody = wait.until(EC.presence_of_element_located((By.XPATH, "//table//tbody")))
             rows = tbody.find_elements(By.TAG_NAME, "tr")
 
@@ -95,42 +78,41 @@ def scrape_ceo_data(company):
                     continue
 
                 first_cell = cols[0]
-                try:
-                    name_p = first_cell.find_elements(By.TAG_NAME, "p")
-                    name = name_p[0].text.strip() if name_p else ""
-                    full_text = first_cell.text
-                    title = full_text.replace(name, "").strip()
-                except:
-                    title = first_cell.text
+                name = first_cell.find_element(By.TAG_NAME, "p").text.strip()
+                full_text = first_cell.text
+                title = full_text.replace(name, "").strip()
 
-                if "Chief Executive Officer" in title or "CEO" in title:
-                    shares_text = cols[3].text.strip()
-                    if shares_text and shares_text != "--":
+                if "Chief Executive Officer" in title:
+                    shares = cols[3].text.strip()
+                    if shares == "--" or not shares:
+                        shares = "Not Available"
+                    else:
+                        # Clean the string to convert it to a float for calculation
                         try:
-                            ceo_shares_count = float(shares_text.replace(',', ''))
+                            ceo_shares_count = float(shares.replace(',', ''))
                         except ValueError:
                             ceo_shares_count = None
-                    
+
                     return calculate_ownership(company, ceo_shares_count)
 
-        except Exception:
+        except TimeoutException:
             pass
 
-        # Step 4: Profile Page Fallback
+        # ---------------- PROFILE PAGE FALLBACK ----------------
         driver.get(f"https://finance.yahoo.com/quote/{company}/profile")
         time.sleep(2)
 
-        profile_rows = driver.find_elements(By.XPATH, "//section//table//tbody/tr")
-        for row in profile_rows:
+        rows = driver.find_elements(By.XPATH, "//section//table//tbody/tr")
+        for row in rows:
             cols = row.find_elements(By.TAG_NAME, "td")
-            if len(cols) >= 2:
-                title = cols[1].text.strip()
-                if "Chief Executive Officer" in title or "CEO" in title:
-                    return calculate_ownership(company, None)
+            if len(cols) < 2:
+                continue
 
-        return "N/A"
+            name = cols[0].text.strip()
+            title = cols[1].text.strip()
+            if "Chief Executive Officer" in title:
+                return calculate_ownership(company, None)
 
-    except Exception as e:
         return "N/A"
 
     finally:
@@ -140,22 +122,36 @@ def scrape_ceo_data(company):
             except:
                 pass
 
+
 def calculate_ownership(ticker, ceo_shares):
+    """
+    Calculates ownership percentage: (CEO Shares / Shares Outstanding) * 100
+    """
     try:
         stock = yf.Ticker(ticker)
-        shares_outstanding = stock.info.get('sharesOutstanding')
+        info = stock.info
+        shares_outstanding = info.get('sharesOutstanding')
 
         if shares_outstanding and ceo_shares:
             percentage = (ceo_shares / shares_outstanding) * 100
             return f"{percentage:.4f}%"
-        elif shares_outstanding is None:
-            return "Data Unavailable"
         else:
             return "N/A"
     except Exception:
         return "N/A"
 
+
+# TICKER RECEPTION: Called from app.py
 def run_process(ticker_from_app):
     if ticker_from_app:
+        # Pass the ticker from app.py into the scrape function and return result
         return scrape_ceo_data(ticker_from_app)
     return "N/A"
+
+
+if __name__ == "__main__":
+    company = input("Enter company name or ticker: ").strip()
+    if company:
+        print(run_process(company))
+
+    sys.stderr = open(os.devnull, 'w')
