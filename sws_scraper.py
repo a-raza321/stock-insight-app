@@ -63,11 +63,11 @@ def scrape_risk_rewards_sws(company_name):
     def create_options():
         """Helper to create a fresh options object for every driver attempt"""
         options = uc.ChromeOptions()
-        # REQUIRED CLOUD SETTINGS
-        options.add_argument('--headless=new')  # Essential for Streamlit Cloud
-        options.add_argument('--no-sandbox')    # Essential for Linux/Container environments
-        options.add_argument('--disable-dev-shm-usage') # Prevents crashes due to limited memory in /dev/shm
-        options.add_argument('--disable-gpu')   # Recommended for headless mode
+        # REQUIRED CLOUD SETTINGS - Headless is defined here to avoid constructor conflict
+        options.add_argument('--headless=new')  
+        options.add_argument('--no-sandbox')    
+        options.add_argument('--disable-dev-shm-usage') 
+        options.add_argument('--disable-gpu')   
         
         # ANTI-BOT SETTINGS
         options.add_argument('--disable-blink-features=AutomationControlled')
@@ -99,17 +99,15 @@ def scrape_risk_rewards_sws(company_name):
             break
 
     try:
-        # Initialize driver with a fresh options object
+        # Fixed: Removed headless=True from constructor to prevent TypeError conflict with options
         driver = uc.Chrome(
             options=create_options(),
             browser_executable_path=chrome_path,
-            use_subprocess=True,
-            headless=True
+            use_subprocess=True
         )
     except Exception as e:
-        # Fallback: Initialize driver with another fresh options object if the first attempt fails
-        # This avoids the RuntimeError: you cannot reuse the ChromeOptions object
-        driver = uc.Chrome(options=create_options(), headless=True)
+        # Fallback with a fresh options object and no constructor headless flag
+        driver = uc.Chrome(options=create_options())
 
     wait = WebDriverWait(driver, 15)
     data = {"company": "", "rewards": [], "risks": []}
