@@ -86,13 +86,19 @@ def scrape_risk_rewards_sws(company_name):
     options.add_argument(f"--user-data-dir={tmp_dir}")
 
     # Detect Chromium binary for Streamlit Cloud
+    chrome_path = None
     if os.path.exists("/usr/bin/chromium"):
-        options.binary_location = "/usr/bin/chromium"
+        chrome_path = "/usr/bin/chromium"
     elif os.path.exists("/usr/bin/chromium-browser"):
-        options.binary_location = "/usr/bin/chromium-browser"
+        chrome_path = "/usr/bin/chromium-browser"
 
-    # use_subprocess=False is essential for Linux containers like Streamlit Cloud
-    driver = uc.Chrome(options=options, use_subprocess=False)
+    # Fix for TypeError: Pass browser_executable_path directly to constructor
+    # instead of setting options.binary_location
+    driver = uc.Chrome(
+        options=options, 
+        browser_executable_path=chrome_path,
+        use_subprocess=False
+    )
     wait = WebDriverWait(driver, 15)
 
     data = {"company": "", "rewards": [], "risks": []}
