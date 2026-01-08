@@ -61,33 +61,53 @@ def search_company(driver, company_name):
 
 def scrape_risk_rewards_sws(company_name):
     def create_options():
-    """Create a fresh ChromeOptions object for each driver instance"""
-    options = uc.ChromeOptions()
-     options.add_argument('--headless=new')          # headless mode inside options
-    options.add_argument('--no-sandbox')            # cloud-friendly
-    options.add_argument('--disable-dev-shm-usage') # cloud-friendly
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument(
-        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument('--disable-images')
-    options.add_argument('--blink-settings=imagesEnabled=false')
-    options.add_argument('--disable-extensions')
-    options.page_load_strategy = 'eager'
+        """Helper to create a fresh options object for every driver attempt"""
+        options = uc.ChromeOptions()
+        # REQUIRED CLOUD SETTINGS - Headless is defined here to avoid constructor conflict
+        options.add_argument('--headless=new')  
+        options.add_argument('--no-sandbox')    
+        options.add_argument('--disable-dev-shm-usage') 
+        options.add_argument('--disable-gpu')   
+        
+        # ANTI-BOT SETTINGS
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        options.add_argument('--window-size=1920,1080')
 
-    # Streamlit Cloud workaround: use temporary user data directory
-    tmp_dir = tempfile.mkdtemp()
-    options.add_argument(f"--user-data-dir={tmp_dir}")
-    return options
+        options.add_argument('--disable-images')
+        options.add_argument('--blink-settings=imagesEnabled=false')
+        options.add_argument('--disable-extensions')
+        options.page_load_strategy = 'eager'
 
-# Initialize the Chrome driver with fresh options
-try:
-    driver = uc.Chrome(options=create_options(), use_subprocess=True)
-except Exception as e:
-    # Fallback: fresh options if needed
-    driver = uc.Chrome(options=create_options())
+        # Streamlit Cloud workaround: Use temporary directory for user data
+        tmp_dir = tempfile.mkdtemp()
+        options.add_argument(f"--user-data-dir={tmp_dir}")
+        return options
 
+    # Detect Chromium binary for Streamlit Cloud
+    chrome_path = None
+    possible_paths = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/lib/chromium-browser/chromium-browser"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            chrome_path = path
+            break
+
+    try:
+        # Fixed: Removed headless=True from constructor to prevent TypeError conflict with options
+        driver = uc.Chrome(
+            options=create_options(),
+            browser_executable_path=chrome_path,
+            use_subprocess=True
+        )
+    except Exception as e:
+        # Fallback with a fresh options object and no constructor headless flag
+        driver = uc.Chrome(options=create_options())
 
     wait = WebDriverWait(driver, 15)
     data = {"company": "", "rewards": [], "risks": []}
@@ -250,4 +270,3 @@ if __name__ == "__main__":
         analysis_summary = get_gemini_analysis(scraped_data)
         sys.stdout.write(analysis_summary + "\n")
         sys.stdout.flush()
-
