@@ -60,32 +60,33 @@ def search_company(driver, company_name):
 
 
 def scrape_risk_rewards_sws(company_name):
-    options = uc.ChromeOptions()
-    
-    # REQUIRED CLOUD SETTINGS
-    options.add_argument('--headless=new')  # Essential for Streamlit Cloud
-    options.add_argument('--no-sandbox')    # Essential for Linux/Container environments
-    options.add_argument('--disable-dev-shm-usage') # Prevents crashes due to limited memory in /dev/shm
-    options.add_argument('--disable-gpu')   # Recommended for headless mode
-    
-    # ANTI-BOT SETTINGS
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument(
-        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    options.add_argument('--window-size=1920,1080')
+    def create_options():
+        """Helper to create a fresh options object for every driver attempt"""
+        options = uc.ChromeOptions()
+        # REQUIRED CLOUD SETTINGS
+        options.add_argument('--headless=new')  # Essential for Streamlit Cloud
+        options.add_argument('--no-sandbox')    # Essential for Linux/Container environments
+        options.add_argument('--disable-dev-shm-usage') # Prevents crashes due to limited memory in /dev/shm
+        options.add_argument('--disable-gpu')   # Recommended for headless mode
+        
+        # ANTI-BOT SETTINGS
+        options.add_argument('--disable-blink-features=AutomationControlled')
+        options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        options.add_argument('--window-size=1920,1080')
 
-    options.add_argument('--disable-images')
-    options.add_argument('--blink-settings=imagesEnabled=false')
-    options.add_argument('--disable-extensions')
-    options.page_load_strategy = 'eager'
+        options.add_argument('--disable-images')
+        options.add_argument('--blink-settings=imagesEnabled=false')
+        options.add_argument('--disable-extensions')
+        options.page_load_strategy = 'eager'
 
-    # Streamlit Cloud workaround: Use temporary directory for user data
-    tmp_dir = tempfile.mkdtemp()
-    options.add_argument(f"--user-data-dir={tmp_dir}")
+        # Streamlit Cloud workaround: Use temporary directory for user data
+        tmp_dir = tempfile.mkdtemp()
+        options.add_argument(f"--user-data-dir={tmp_dir}")
+        return options
 
     # Detect Chromium binary for Streamlit Cloud
     chrome_path = None
-    # Check common paths for Chromium in Streamlit/Debian environments
     possible_paths = [
         "/usr/bin/google-chrome",
         "/usr/bin/chromium",
@@ -98,16 +99,17 @@ def scrape_risk_rewards_sws(company_name):
             break
 
     try:
-        # Initialize driver with specific cloud-friendly configuration
+        # Initialize driver with a fresh options object
         driver = uc.Chrome(
-            options=options,
+            options=create_options(),
             browser_executable_path=chrome_path,
-            use_subprocess=True, # Recommended for cloud environments to avoid zombie processes
-            headless=True        # Explicitly set headless in the constructor for UC
+            use_subprocess=True,
+            headless=True
         )
     except Exception as e:
-        # Fallback if specific binary fails
-        driver = uc.Chrome(options=options, headless=True)
+        # Fallback: Initialize driver with another fresh options object if the first attempt fails
+        # This avoids the RuntimeError: you cannot reuse the ChromeOptions object
+        driver = uc.Chrome(options=create_options(), headless=True)
 
     wait = WebDriverWait(driver, 15)
     data = {"company": "", "rewards": [], "risks": []}
