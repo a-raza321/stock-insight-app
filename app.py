@@ -18,7 +18,7 @@ from ceo import get_ceo_ownership
 
 warnings.filterwarnings("ignore")
 
-# Global lock to prevent concurrent undetected_chromedriver initialization
+# Global lock to prevent concurrent driver initialization which causes resource crashes on servers
 driver_lock = threading.Lock()
 
 st.set_page_config(
@@ -28,7 +28,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS
+# Custom CSS for a premium look
 st.markdown("""
     <style>
     header {visibility: hidden;}
@@ -220,7 +220,8 @@ def fetch_all_data_parallel(ticker):
     """
     Stabilized execution for Streamlit deployment:
     1. Parallel execution for lightweight request-based tasks.
-    2. Strictly sequential execution for ALL Selenium-based scrapers under a single lock session.
+    2. Strictly sequential execution for Selenium-based scrapers under a single lock session.
+    3. Added specific retry logic for Moat Scraper as it is the most sensitive.
     """
     
     # Task 1: Parallel Lightweight Tasks (No Selenium)
@@ -234,37 +235,38 @@ def fetch_all_data_parallel(ticker):
         moat_indicators = f_moat_ind.result()
 
     # Task 2: Sequential Selenium Tasks
-    # Running these strictly one-by-one under the lock to prevent memory crashes on Streamlit Cloud.
     sws_data = {}
     ceo_val = "N/A"
     moat_score = "N/A"
 
+    # We use the driver_lock to ensure only one browser instance is handled at a time
     with driver_lock:
-        # 1. Simply Wall St
+        # 1. Simply Wall St (Selenium-based)
         try:
             sws_data = scrape_risk_rewards_sws(ticker)
-        except Exception as e:
-            sws_data = {"error": str(e)}
+        except:
+            sws_data = {"rewards": ["Unavailable"], "risks": ["Unavailable"]}
 
-        # Small buffer for process cleanup
-        time.sleep(1)
-
-        # 2. CEO Ownership
+        # 2. CEO Ownership (Selenium-based)
         try:
             ceo_val = get_ceo_ownership(ticker)
-        except Exception as e:
+        except:
             ceo_val = "N/A"
 
-        # Small buffer for process cleanup
-        time.sleep(1)
+        # 3. Moat Score (GuruFocus Selenium)
+        # Added a 2nd attempt retry loop within the lock for better availability
+        for attempt in range(2):
+            try:
+                moat_score = get_moat_score_selenium(ticker)
+                if moat_score and moat_score != "N/A":
+                    break # Success
+                time.sleep(2) # Wait before retry if result was N/A
+            except:
+                if attempt == 1:
+                    moat_score = "N/A"
+                time.sleep(2)
 
-        # 3. Moat Score (GuruFocus)
-        try:
-            moat_score = get_moat_score_selenium(ticker)
-        except Exception as e:
-            moat_score = "N/A"
-
-    # Consolidate results
+    # Consolidate results into table
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
@@ -287,7 +289,7 @@ def main():
             if st.button("Generate Comprehensive Report") and ticker_input:
                 ticker = format_ticker(ticker_input)
                 status_text = st.empty()
-                status_text.info(f"Gathering data for {ticker}. Please wait approximately 45-60 seconds...")
+                status_text.info(f"Gathering data for {ticker}. Please wait approximately 60 seconds...")
                 
                 try:
                     metrics, sws, moat = fetch_all_data_parallel(ticker)
