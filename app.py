@@ -220,7 +220,7 @@ def fetch_all_data_parallel(ticker):
     """
     To ensure stability on Streamlit deployment, we split tasks:
     1. Run request-based tasks (YFinance, Finviz, Gemini) in parallel.
-    2. Run Selenium-based tasks (CEO, Moat Score) sequentially to save RAM.
+    2. Run ALL Selenium-based tasks (CEO, Moat Score) sequentially to save RAM.
     """
     
     # Task 1: Lightweight Parallel Tasks
@@ -236,21 +236,24 @@ def fetch_all_data_parallel(ticker):
         moat_indicators = f_moat_ind.result()
 
     # Task 2: Heavyweight Selenium Tasks (Sequential Execution)
-    # We run these one-by-one to avoid Chrome instance conflicts on the server
+    # We explicitly run these inside the lock one by one to avoid resource crashes
     
-    # Get Moat Score
-    try:
-        with driver_lock:
-            moat_score = get_moat_score_selenium(ticker)
-    except Exception as e:
-        moat_score = f"N/A (Error: {str(e)[:50]})"
-
     # Get CEO Ownership
+    ceo_val = "N/A"
     try:
         with driver_lock:
             ceo_val = get_ceo_ownership(ticker)
     except Exception as e:
-        ceo_val = f"N/A (Error: {str(e)[:50]})"
+        ceo_val = f"N/A (CEO Error: {str(e)[:40]})"
+
+    # Get Moat Score (Sequential after CEO to release memory)
+    moat_score = "N/A"
+    try:
+        # Re-using lock or separate locks; sequential is key here
+        with driver_lock:
+            moat_score = get_moat_score_selenium(ticker)
+    except Exception as e:
+        moat_score = f"N/A (Moat Error: {str(e)[:40]})"
 
     # Consolidate results
     for k, v in fv_data.items():
@@ -276,7 +279,7 @@ def main():
                 ticker = format_ticker(ticker_input)
                 # Show specific progress status for deployment
                 status_text = st.empty()
-                status_text.info(f"Gathering data for {ticker}. This takes ~30-45 seconds on the server...")
+                status_text.info(f"Gathering data for {ticker}. This takes ~45-60 seconds on the server...")
                 
                 try:
                     metrics, sws, moat = fetch_all_data_parallel(ticker)
