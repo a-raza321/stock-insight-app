@@ -236,9 +236,7 @@ def fetch_all_data_parallel(ticker):
         moat_indicators = f_moat_ind.result()
 
     # Task 2: Heavyweight Selenium Tasks (Sequential Execution)
-    # We explicitly run these inside the lock one by one to avoid resource crashes
-    
-    # Get CEO Ownership
+    # Get CEO Ownership first
     ceo_val = "N/A"
     try:
         with driver_lock:
@@ -246,14 +244,23 @@ def fetch_all_data_parallel(ticker):
     except Exception as e:
         ceo_val = f"N/A (CEO Error: {str(e)[:40]})"
 
-    # Get Moat Score (Sequential after CEO to release memory)
+    # CRITICAL: Cool-down period. 
+    # Give the server 5 seconds to kill the previous Chrome processes and clear RAM.
+    time.sleep(5)
+
+    # Get Moat Score (Sequential after CEO with Retry Logic)
     moat_score = "N/A"
-    try:
-        # Re-using lock or separate locks; sequential is key here
-        with driver_lock:
-            moat_score = get_moat_score_selenium(ticker)
-    except Exception as e:
-        moat_score = f"N/A (Moat Error: {str(e)[:40]})"
+    for attempt in range(2): # Try up to 2 times
+        try:
+            with driver_lock:
+                moat_score = get_moat_score_selenium(ticker)
+            if moat_score and moat_score != "N/A":
+                break # Success
+        except Exception as e:
+            if attempt == 0:
+                time.sleep(5) # Wait longer before second attempt
+                continue
+            moat_score = f"N/A (Moat Error: {str(e)[:40]})"
 
     # Consolidate results
     for k, v in fv_data.items():
@@ -279,7 +286,7 @@ def main():
                 ticker = format_ticker(ticker_input)
                 # Show specific progress status for deployment
                 status_text = st.empty()
-                status_text.info(f"Gathering data for {ticker}. This takes ~45-60 seconds on the server...")
+                status_text.info(f"Gathering data for {ticker}. This takes ~60-80 seconds on the server...")
                 
                 try:
                     metrics, sws, moat = fetch_all_data_parallel(ticker)
