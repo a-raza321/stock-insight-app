@@ -92,7 +92,7 @@ def call_gemini_general(prompt, system_instruction=None, use_search=False):
             if response.status_code == 200:
                 result = response.json()
                 return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text',
-                                                                                                     'N/A').strip()
+                                                                                                    'N/A').strip()
             elif response.status_code == 429:
                 time.sleep(i)
         except:
@@ -270,7 +270,9 @@ def fetch_all_data_parallel(ticker):
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
-    yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Scraped", "Value": ceo_val})
+    # CHANGE: CEO Ownership % is inserted at position 7 (index 7) instead of appended
+    yf_rows.insert(7, {"Metric Name": "CEO Ownership %", "Source": "Scraped", "Value": ceo_val})
+    
     yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
     
     return yf_rows, sws_data, moat_indicators
