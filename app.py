@@ -19,7 +19,6 @@ from ceo import get_ceo_ownership
 warnings.filterwarnings("ignore")
 
 # Global lock to prevent concurrent undetected_chromedriver initialization
-# which causes the FileExistsError [WinError 183]
 driver_lock = threading.Lock()
 
 st.set_page_config(
@@ -50,7 +49,6 @@ st.markdown("""
 
 API_KEY = ""
 MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
-
 
 def format_ticker(ticker):
     return ticker.strip().upper()
@@ -94,7 +92,7 @@ def call_gemini_general(prompt, system_instruction=None, use_search=False):
             if response.status_code == 200:
                 result = response.json()
                 return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text',
-                                                                                                      'N/A').strip()
+                                                                                                     'N/A').strip()
             elif response.status_code == 429:
                 time.sleep(i)
         except:
@@ -135,6 +133,7 @@ def fetch_yfinance_data(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info
 
+
         metrics = [
             ("Company Name", info.get('longName', ticker), False),
             ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A')), True),
@@ -147,9 +146,11 @@ def fetch_yfinance_data(ticker):
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
                              "Value": format_large_number(val, is_currency=is_curr)})
 
+
         total_insider = info.get('heldPercentInsiders')
         ins_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
+
 
         try:
             opts = stock.options
@@ -181,11 +182,13 @@ def fetch_yfinance_data(ticker):
             all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance",
                              "Value": format_large_number(float(cash), True)})
 
+
             if not q_is.empty:
                 is_data = q_is.iloc[:, 0]
                 op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
                 all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance",
                                  "Value": format_large_number(float(op_exp), True)})
+
 
             if not q_cf.empty:
                 op_cash = 0
@@ -213,41 +216,49 @@ def fetch_moat_indicators(ticker):
                                use_search=True)
 
 
-def safe_get_ceo_ownership(ticker):
-    """Wrapper to handle lock for CEO scraping to prevent FileExistsError"""
-    with driver_lock:
-        return get_ceo_ownership(ticker)
-
-
-def safe_get_moat_score(ticker):
-    """Wrapper to handle lock for Moat scraping to prevent FileExistsError"""
-    with driver_lock:
-        return get_moat_score_selenium(ticker)
-
-
 def fetch_all_data_parallel(ticker):
+    """
+    To ensure stability on Streamlit deployment, we split tasks:
+    1. Run request-based tasks (YFinance, Finviz, Gemini) in parallel.
+    2. Run Selenium-based tasks (CEO, Moat Score) sequentially to save RAM.
+    """
+    
+    # Task 1: Lightweight Parallel Tasks
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         f_yf = executor.submit(fetch_yfinance_data, ticker)
         f_fv = executor.submit(scrape_finviz, ticker)
         f_sws = executor.submit(scrape_risk_rewards_sws, ticker)
         f_moat_ind = executor.submit(fetch_moat_indicators, ticker)
-
-        # Selenium tasks wrapped with locks
-        f_moat_score = executor.submit(safe_get_moat_score, ticker)
-        f_ceo = executor.submit(safe_get_ceo_ownership, ticker)
-
+        
         yf_rows = f_yf.result()
         fv_data = f_fv.result()
-        moat_score = f_moat_score.result()
         sws_data = f_sws.result()
         moat_indicators = f_moat_ind.result()
-        ceo_val = f_ceo.result()
 
+    # Task 2: Heavyweight Selenium Tasks (Sequential Execution)
+    # We run these one-by-one to avoid Chrome instance conflicts on the server
+    
+    # Get Moat Score
+    try:
+        with driver_lock:
+            moat_score = get_moat_score_selenium(ticker)
+    except Exception as e:
+        moat_score = f"N/A (Error: {str(e)[:50]})"
+
+    # Get CEO Ownership
+    try:
+        with driver_lock:
+            ceo_val = get_ceo_ownership(ticker)
+    except Exception as e:
+        ceo_val = f"N/A (Error: {str(e)[:50]})"
+
+    # Consolidate results
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
     yf_rows.append({"Metric Name": "CEO Ownership %", "Source": "Yahoo Finance (Scraped)", "Value": ceo_val})
     yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
+    
     return yf_rows, sws_data, moat_indicators
 
 
@@ -263,16 +274,20 @@ def main():
                                          label_visibility="collapsed")
             if st.button("Generate Comprehensive Report") and ticker_input:
                 ticker = format_ticker(ticker_input)
-                with st.spinner(f"Running Parallel Scrapers for {ticker}..."):
-                    try:
-                        metrics, sws, moat = fetch_all_data_parallel(ticker)
-                        st.session_state.report_data = metrics
-                        st.session_state.sws_report = sws
-                        st.session_state.moat_report = moat
-                        st.session_state.current_ticker = ticker
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Analysis failed: {e}")
+                # Show specific progress status for deployment
+                status_text = st.empty()
+                status_text.info(f"Gathering data for {ticker}. This takes ~30-45 seconds on the server...")
+                
+                try:
+                    metrics, sws, moat = fetch_all_data_parallel(ticker)
+                    st.session_state.report_data = metrics
+                    st.session_state.sws_report = sws
+                    st.session_state.moat_report = moat
+                    st.session_state.current_ticker = ticker
+                    status_text.empty()
+                    st.rerun()
+                except Exception as e:
+                    status_text.error(f"Critical error during analysis: {e}")
     else:
         col_title, col_reset = st.columns([8, 2])
         col_title.title(f"📊 {st.session_state.current_ticker} Report")
