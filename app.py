@@ -313,7 +313,14 @@ def main():
             st.subheader("Consolidated Market Data")
             if st.session_state.report_data:
                 df = pd.DataFrame(st.session_state.report_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # FIX: Arrow Serialization Error
+                # Convert 'Value' column to string to prevent Arrow TypeError from mixed types
+                df['Value'] = df['Value'].astype(str)
+                
+                # FIX: Deprecation Warning
+                # Replaced use_container_width=True with width='stretch'
+                st.dataframe(df, width='stretch', hide_index=True)
             else:
                 st.info("No metric data found.")
 
