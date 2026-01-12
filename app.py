@@ -7,20 +7,11 @@ from bs4 import BeautifulSoup
 import time
 import concurrent.futures
 from datetime import datetime
-import os
-import threading
 import warnings
-
-# Import your custom scrapers
-from moat_scraper import get_moat_score_selenium
-from sws_scraper import scrape_risk_rewards_sws
-from ceo import get_ceo_ownership
 
 warnings.filterwarnings("ignore")
 
-# Global lock to prevent concurrent driver initialization which causes resource crashes on servers
-driver_lock = threading.Lock()
-
+# --- CONFIGURATION & STYLING ---
 st.set_page_config(
     page_title="Stock Insight Pro",
     page_icon="📈",
@@ -28,7 +19,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for a premium look
 st.markdown("""
     <style>
     header {visibility: hidden;}
@@ -43,13 +33,11 @@ st.markdown("""
     [data-testid="stMetricLabel"] { color: #555555 !important; }
     .stMarkdown, p, span, h1, h2, h3 { color: #1e1e1e !important; }
     hr { border: 0.5px solid #eeeeee !important; }
-    .report-card { background-color: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #e9ecef; margin-bottom: 20px; white-space: pre-wrap; }
     </style>
 """, unsafe_allow_html=True)
 
-API_KEY = ""
-MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
 
+# --- HELPER FUNCTIONS ---
 def format_ticker(ticker):
     return ticker.strip().upper()
 
@@ -81,26 +69,9 @@ def get_insider_sentiment(val_str):
         return "N/A"
 
 
-def call_gemini_general(prompt, system_instruction=None, use_search=False):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.0}}
-    if system_instruction: payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-    if use_search: payload["tools"] = [{"google_search": {}}]
-    for i in [1, 2, 4, 8, 16]:
-        try:
-            response = requests.post(url, json=payload, timeout=30)
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text',
-                                                                                                    'N/A').strip()
-            elif response.status_code == 429:
-                time.sleep(i)
-        except:
-            time.sleep(i)
-    return "N/A"
-
-
+# --- SCRAPERS ---
 def scrape_finviz(ticker):
+    """Scrapes specific previously requested metrics from Finviz snapshot table."""
     url = f"https://finviz.com/quote.ashx?t={ticker}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
@@ -117,23 +88,27 @@ def scrape_finviz(ticker):
             for i in range(0, len(cols), 2):
                 key, val = cols[i].text.strip(), cols[i + 1].text.strip()
                 data[key] = val
+
+        # Filter to only the previously requested metrics + new requested Insider Ownership %
         return {
             "Net Insider Buying vs Selling %": data.get("Insider Trans", "N/A"),
             "Net Insider Activity": get_insider_sentiment(data.get("Insider Trans", "N/A")),
             "Institutional Ownership %": data.get("Inst Own", "N/A"),
-            "Short Float %": data.get("Short Float", "N/A")
+            "Short Float %": data.get("Short Float", "N/A"),
+            "Insider Ownership % (Finviz)": data.get("Insider Own", "N/A")  # Newly added
         }
     except:
         return {}
 
 
 def fetch_yfinance_data(ticker):
+    """Fetches previously requested metrics from Yahoo Finance."""
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
 
-
+        # General Market Data
         metrics = [
             ("Company Name", info.get('longName', ticker), False),
             ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A')), True),
@@ -146,11 +121,9 @@ def fetch_yfinance_data(ticker):
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
                              "Value": format_large_number(val, is_currency=is_curr)})
 
-
         total_insider = info.get('heldPercentInsiders')
         ins_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
-
 
         try:
             opts = stock.options
@@ -182,13 +155,11 @@ def fetch_yfinance_data(ticker):
             all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance",
                              "Value": format_large_number(float(cash), True)})
 
-
             if not q_is.empty:
                 is_data = q_is.iloc[:, 0]
                 op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
                 all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance",
                                  "Value": format_large_number(float(op_exp), True)})
-
 
             if not q_cf.empty:
                 op_cash = 0
@@ -209,140 +180,65 @@ def fetch_yfinance_data(ticker):
     return all_rows
 
 
-def fetch_moat_indicators(ticker):
-    prompt = f"Identify 2-4 qualitative economic moat indicators for {ticker} (Brand, Switching Costs, Network Effect) based on GuruFocus."
-    return call_gemini_general(prompt,
-                               system_instruction="Output ONLY plain bullet points: - [Heading]: [Description max 10 words].",
-                               use_search=True)
-
-
-def fetch_all_data_parallel(ticker):
-    """
-    Stabilized execution for Streamlit deployment:
-    1. Parallel execution for lightweight request-based tasks.
-    2. Strictly sequential execution for Selenium-based scrapers under a single lock session.
-    3. Added specific retry logic for Moat Scraper as it is the most sensitive.
-    """
-    
-    # Task 1: Parallel Lightweight Tasks (No Selenium)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+# --- MAIN EXECUTION LOGIC ---
+def fetch_all_data(ticker):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         f_yf = executor.submit(fetch_yfinance_data, ticker)
         f_fv = executor.submit(scrape_finviz, ticker)
-        f_moat_ind = executor.submit(fetch_moat_indicators, ticker)
-        
+
         yf_rows = f_yf.result()
         fv_data = f_fv.result()
-        moat_indicators = f_moat_ind.result()
 
-    # Task 2: Sequential Selenium Tasks
-    sws_data = {}
-    ceo_val = "N/A"
-    moat_score = "N/A"
-
-    # We use the driver_lock to ensure only one browser instance is handled at a time
-    with driver_lock:
-        # 1. Simply Wall St (Selenium-based)
-        try:
-            sws_data = scrape_risk_rewards_sws(ticker)
-        except:
-            sws_data = {"rewards": ["Unavailable"], "risks": ["Unavailable"]}
-
-        # 2. CEO Ownership (Selenium-based)
-        try:
-            ceo_val = get_ceo_ownership(ticker)
-        except:
-            ceo_val = "N/A"
-
-        # 3. Moat Score (GuruFocus Selenium)
-        # Added a 2nd attempt retry loop within the lock for better availability
-        for attempt in range(2):
-            try:
-                moat_score = get_moat_score_selenium(ticker)
-                if moat_score and moat_score != "N/A":
-                    break # Success
-                time.sleep(2) # Wait before retry if result was N/A
-            except:
-                if attempt == 1:
-                    moat_score = "N/A"
-                time.sleep(2)
-
-    # Consolidate results into table
+    # Consolidate results
     for k, v in fv_data.items():
         yf_rows.append({"Metric Name": k, "Source": "Finviz", "Value": v})
 
-    # CHANGE: CEO Ownership % is inserted at position 7 (index 7) instead of appended
-    yf_rows.insert(7, {"Metric Name": "CEO Ownership %", "Source": "Scraped", "Value": ceo_val})
-    
-    yf_rows.append({"Metric Name": "Moat Score", "Source": "Guru Focus (Scraped)", "Value": moat_score})
-    
-    return yf_rows, sws_data, moat_indicators
+    return yf_rows
 
 
 def main():
     if 'report_data' not in st.session_state: st.session_state.report_data = None
+
     if st.session_state.report_data is None:
         st.markdown(
-            '<div class="main-header"><h1>Stock Insight Pro</h1><p>Institutional-Grade Stock Analysis</p></div>',
+            '<div class="main-header"><h1>Stock Insight Pro</h1><p>Institutional-Grade Metrics & Financials</p></div>',
             unsafe_allow_html=True)
+
         _, center_col, _ = st.columns([1, 1.5, 1])
         with center_col:
-            ticker_input = st.text_input("Ticker", placeholder="e.g. TSLA, NVDA", key="ticker_box",
+            ticker_input = st.text_input("Enter Ticker", placeholder="e.g. TSLA, NVDA", key="ticker_box",
                                          label_visibility="collapsed")
             if st.button("Generate Comprehensive Report") and ticker_input:
                 ticker = format_ticker(ticker_input)
                 status_text = st.empty()
-                status_text.info(f"Gathering data for {ticker}. Please wait approximately 60 seconds...")
-                
+                status_text.info(f"Gathering data for {ticker} from Yahoo Finance and Finviz...")
+
                 try:
-                    metrics, sws, moat = fetch_all_data_parallel(ticker)
-                    st.session_state.report_data = metrics
-                    st.session_state.sws_report = sws
-                    st.session_state.moat_report = moat
-                    st.session_state.current_ticker = ticker
-                    status_text.empty()
-                    st.rerun()
+                    metrics = fetch_all_data(ticker)
+                    if metrics:
+                        st.session_state.report_data = metrics
+                        st.session_state.current_ticker = ticker
+                        status_text.empty()
+                        st.rerun()
+                    else:
+                        status_text.error("No data could be retrieved for this ticker.")
                 except Exception as e:
                     status_text.error(f"Analysis failed: {e}")
     else:
         col_title, col_reset = st.columns([8, 2])
-        col_title.title(f"📊 {st.session_state.current_ticker} Report")
+        col_title.title(f"📊 {st.session_state.current_ticker} Financial Report")
         if col_reset.button("New Analysis"):
             st.session_state.report_data = None
             st.rerun()
 
-        tab1, tab2, tab3 = st.tabs(["Metrics & Financials", "Risk & Reward Analysis", "Moat Indicators"])
-        with tab1:
-            st.subheader("Consolidated Market Data")
-            if st.session_state.report_data:
-                df = pd.DataFrame(st.session_state.report_data)
-                
-                # FIX: Arrow Serialization Error
-                # Convert 'Value' column to string to prevent Arrow TypeError from mixed types
-                df['Value'] = df['Value'].astype(str)
-                
-                # FIX: Deprecation Warning
-                # Replaced use_container_width=True with width='stretch'
-                st.dataframe(df, width='stretch', hide_index=True)
-            else:
-                st.info("No metric data found.")
+        st.subheader("Consolidated Market & Financial Metrics")
+        df = pd.DataFrame(st.session_state.report_data)
 
-        with tab2:
-            st.subheader("Simply Wall St: Scraped Risk/Reward Analysis")
-            sws = st.session_state.sws_report
-            if sws and (sws.get('rewards') or sws.get('risks')):
-                content = f"**{sws.get('company', st.session_state.current_ticker)} Analysis**\n\n### Rewards\n"
-                content += "\n".join([f"- {r}" for r in sws.get('rewards', [])]) if sws.get(
-                    'rewards') else "- No rewards found"
-                content += "\n\n### Risks\n"
-                content += "\n".join([f"- {r}" for r in sws.get('risks', [])]) if sws.get(
-                    'risks') else "- No risks found"
-                st.markdown(f'<div class="report-card">{content}</div>', unsafe_allow_html=True)
-            else:
-                st.info("Simply Wall St data unavailable or search failed.")
-
-        with tab3:
-            st.subheader("GuruFocus: Qualitative Moat Indicators")
-            st.markdown(f'<div class="report-card">{st.session_state.moat_report}</div>', unsafe_allow_html=True)
+        if not df.empty:
+            df['Value'] = df['Value'].astype(str)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No metric data found.")
 
 
 if __name__ == "__main__":
