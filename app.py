@@ -72,6 +72,7 @@ def get_insider_sentiment(val_str):
 def scrape_yahoo_insider_stat(ticker):
     """
     Directly scrapes the Statistics page for Insider %.
+    Uses multiple backup selectors for reliability on different YF layouts.
     """
     insider_pct = "N/A"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -81,13 +82,27 @@ def scrape_yahoo_insider_stat(ticker):
         resp = requests.get(stats_url, headers=headers, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            for row in soup.find_all("tr"):
-                if "Held by Insiders" in row.text:
-                    tds = row.find_all("td")
-                    if len(tds) >= 2:
-                        insider_pct = tds[1].text.strip()
-                        break
-    except:
+            # Yahoo often hides data in different table formats; we search for the specific text
+            search_text = "Held by Insiders"
+            
+            # Method 1: Find row by text and get next cell
+            target_row = soup.find("tr", string=re.compile(search_text, re.IGNORECASE))
+            if not target_row:
+                # Method 2: Iterate through all rows if simple find fails
+                for row in soup.find_all("tr"):
+                    row_text = row.get_text()
+                    if search_text in row_text:
+                        tds = row.find_all("td")
+                        if len(tds) >= 2:
+                            # Usually the percentage is in the second or last column
+                            potential_val = tds[-1].text.strip()
+                            if "%" in potential_val:
+                                return potential_val
+            else:
+                tds = target_row.find_all("td")
+                if len(tds) >= 2:
+                    return tds[1].text.strip()
+    except Exception:
         pass
     return insider_pct
 
@@ -172,10 +187,10 @@ def fetch_yfinance_comprehensive(ticker):
         # 4. INSIDER OWNERSHIP % (Aggressive Fallback)
         ins_val = "N/A"
         raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
-        if raw_ins and raw_ins != 'N/A':
+        if raw_ins and raw_ins != 'N/A' and isinstance(raw_ins, (int, float)):
             ins_val = f"{float(raw_ins) * 100:.2f}%"
         else:
-            # Fallback to direct scraping of the stats page
+            # Fallback to direct scraping of the stats page - label as "Yahoo Finance"
             ins_val = scrape_yahoo_insider_stat(ticker)
 
         # Build basic metrics table
