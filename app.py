@@ -3,137 +3,139 @@ import yfinance as yf
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import warnings
-import time
-import re
-import json
-import logging
+import datetime
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-warnings.filterwarnings("ignore")
+# --- Page Configuration ---
+st.set_page_config(page_title="CEO Value Analysis", layout="centered")
 
-st.set_page_config(page_title="Stock Insight Pro", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
-
-# Custom CSS
+# Custom CSS for high contrast and styling
 st.markdown("""
     <style>
-    header {visibility: hidden;}
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stApp { background-color: #ffffff; }
-    .block-container { padding-top: 1rem !important; max-width: 1200px; }
-    .main-header { text-align: center; margin-bottom: 2rem; color: #1e1e1e; }
-    .stTextInput > div > div > input { color: #1e1e1e !important; background-color: #ffffff !important; }
-    .stButton > button { color: #ffffff !important; background-color: #007bff !important; width: 100%; border-radius: 8px; font-weight: bold; }
-    .stMarkdown, p, span, h1, h2, h3 { color: #1e1e1e !important; }
+    .main {
+        background-color: #FFFFFF;
+    }
+    h1 {
+        color: #000000;
+        text-align: center;
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 800;
+    }
+    .stButton>button {
+        width: 100%;
+        background-color: #000000;
+        color: #FFFFFF;
+        border-radius: 5px;
+        height: 3em;
+        font-weight: bold;
+    }
+    .stButton>button:hover {
+        background-color: #333333;
+        color: #FFFFFF;
+    }
+    /* Simple black table styling */
+    table {
+        color: black;
+        border-collapse: collapse;
+        width: 100%;
+    }
+    th {
+        background-color: #000000 !important;
+        color: #FFFFFF !important;
+        text-align: left !important;
+    }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-# Session management for cloud deployment
-if 'session' not in st.session_state:
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"})
-    try: session.get("https://finance.yahoo.com", timeout=5)
-    except: pass
-    st.session_state.session = session
+def get_finviz_data(ticker):
+    """Scrapes data from Finviz snapshot table."""
+    try:
+        url = f"https://finviz.com/quote.ashx?t={ticker.upper()}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Finviz stores data in a table with class 'snapshot-table2'
+        table = soup.find('table', class_='snapshot-table2')
+        if not table:
+            return None
+        
+        rows = table.find_all('tr')
+        data = {}
+        for row in rows:
+            cols = row.find_all('td')
+            for i in range(0, len(cols), 2):
+                label = cols[i].text.strip()
+                value = cols[i+1].text.strip()
+                data[label] = value
+        
+        return data
+    except Exception:
+        return None
 
-def scrape_yahoo_insider(ticker):
-    """Robust scraper for Insider Ownership %"""
-    urls = [f"https://finance.yahoo.com/quote/{ticker}/key-statistics", f"https://finance.yahoo.com/quote/{ticker}/holders"]
-    for url in urls:
+def generate_report(ticker):
+    ticker = ticker.upper().strip()
+    if not ticker:
+        st.error("Please enter a valid ticker symbol.")
+        return
+
+    with st.spinner(f"Fetching data for {ticker}..."):
+        # --- Yahoo Finance Data ---
         try:
-            time.sleep(1)
-            resp = st.session_state.session.get(url, timeout=10)
-            if resp.status_code != 200: continue
-            soup = BeautifulSoup(resp.text, "html.parser")
+            yt = yf.Ticker(ticker)
+            info = yt.info
             
-            # Method 1: JSON Store
-            scripts = soup.find_all('script')
-            for script in scripts:
-                if script.string and 'root.App.main' in script.string:
-                    match = re.search(r'root\.App\.main\s*=\s*(\{.*?\});', script.string)
-                    if match:
-                        data = json.loads(match.group(1))
-                        stores = data.get('context', {}).get('dispatcher', {}).get('stores', {}).get('QuoteSummaryStore', {})
-                        val = stores.get('majorHoldersBreakdown', {}).get('heldPercentInsiders', {}).get('fmt') or \
-                              stores.get('defaultKeyStatistics', {}).get('heldPercentInsiders', {}).get('fmt')
-                        if val: return val
-            
-            # Method 2: Table Search
-            for row in soup.find_all("tr"):
-                if "held by insiders" in row.get_text().lower():
-                    tds = row.find_all("td")
-                    if len(tds) >= 2 and "%" in tds[1].text: return tds[1].text.strip()
-        except: continue
-    return "N/A"
+            # Helper to safely get info
+            def g_yf(key): return info.get(key, "N/A")
 
-def fetch_data(ticker_input):
-    ticker = ticker_input.strip().upper()
-    rows = []
-    
-    # 1. Yahoo Finance Data (Ticker, Price, Insider %)
-    try:
-        stock = yf.Ticker(ticker)
-        price = stock.fast_info.get('last_price') or stock.info.get('currentPrice', 'N/A')
-        insider = scrape_yahoo_insider(ticker)
-        if insider == "N/A":
-            raw = stock.info.get('heldPercentInsiders')
-            if isinstance(raw, (int, float)): insider = f"{raw*100:.2f}%"
-        
-        rows.append({"Metric Name": "Ticker", "Source": "Yahoo Finance", "Value": ticker})
-        rows.append({"Metric Name": "Current Stock Price", "Source": "Yahoo Finance", "Value": f"${price:,.2f}" if isinstance(price, (int, float)) else price})
-        rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": insider})
-    except Exception as e:
-        logger.error(f"Yahoo error: {e}")
+            # Get latest expiration date (using options as proxy for latest event date)
+            exp_dates = yt.options
+            latest_exp = exp_dates[0] if exp_dates else "N/A"
 
-    # 2. Finviz Data (Keep as is)
-    try:
-        fv_url = f"https://finviz.com/quote.ashx?t={ticker}"
-        resp = requests.get(fv_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            table = soup.find("table", class_="snapshot-table2")
-            if table:
-                data_map = {}
-                for tr in table.find_all("tr"):
-                    tds = tr.find_all("td")
-                    for i in range(0, len(tds), 2):
-                        data_map[tds[i].text.strip()] = tds[i+1].text.strip()
-                
-                picks = {"Insider Trans": "Net Insider Buying vs Selling %", "Inst Own": "Institutional Ownership %", 
-                         "Short Float": "Short Float %", "Insider Own": "Insider Ownership %"}
-                for k, v in picks.items():
-                    if k in data_map:
-                        rows.append({"Metric Name": v, "Source": "Finviz", "Value": data_map[k]})
-    except Exception as e:
-        logger.error(f"Finviz error: {e}")
-        
-    return rows
+            yf_metrics = [
+                {"Metric Name": "Current Stock Value", "Source": "Yahoo Finance", "Value": f"${g_yf('currentPrice')}"},
+                {"Metric Name": "Market Cap", "Source": "Yahoo Finance", "Value": f"{g_yf('marketCap'):,}" if isinstance(g_yf('marketCap'), int) else g_yf('marketCap')},
+                {"Metric Name": "All Insider Ownership %", "Source": "Yahoo Finance", "Value": f"{g_yf('heldPercentInsiders') * 100:.2f}%" if isinstance(g_yf('heldPercentInsiders'), float) else g_yf('heldPercentInsiders')},
+                {"Metric Name": "Latest Expiration Date", "Source": "Yahoo Finance", "Value": latest_exp},
+            ]
+        except Exception as e:
+            st.error(f"Error fetching Yahoo Finance data: {e}")
+            yf_metrics = []
 
-def main():
-    if 'report_data' not in st.session_state: st.session_state.report_data = None
+        # --- Finviz Data ---
+        fv_data = get_finviz_data(ticker)
+        if fv_data:
+            fv_metrics = [
+                {"Metric Name": "Net Insider Activity (Buying/Selling)", "Source": "Finviz", "Value": fv_data.get('Insider Trans', "N/A")},
+                {"Metric Name": "Net Buying/Selling %", "Source": "Finviz", "Value": fv_data.get('Inst Trans', "N/A")}, # Note: Trans usually refers to net activity
+                {"Metric Name": "Short Float %", "Source": "Finviz", "Value": fv_data.get('Short Float', "N/A")},
+                {"Metric Name": "Institutional Ownership %", "Source": "Finviz", "Value": fv_data.get('Inst Own', "N/A")},
+                {"Metric Name": "Insider Ownership %", "Source": "Finviz", "Value": fv_data.get('Insider Own', "N/A")},
+            ]
+        else:
+            st.warning("Could not retrieve Finviz data. Ticker might be incorrect or site is blocking requests.")
+            fv_metrics = []
 
-    if st.session_state.report_data is None:
-        st.markdown('<div class="main-header"><h1>Stock Insight Pro</h1><p>Streamlined Insider & Market Analysis</p></div>', unsafe_allow_html=True)
-        _, center_col, _ = st.columns([1, 1.5, 1])
-        with center_col:
-            ticker_input = st.text_input("Ticker", placeholder="e.g. TSLA", key="ticker_box", label_visibility="collapsed")
-            if st.button("Generate Report") and ticker_input:
-                with st.spinner(f"Fetching data for {ticker_input.upper()}..."):
-                    st.session_state.report_data = fetch_data(ticker_input)
-                    st.session_state.current_ticker = ticker_input.upper()
-                    st.rerun()
-    else:
-        col_title, col_reset = st.columns([8, 2])
-        col_title.title(f"📊 {st.session_state.current_ticker} Report")
-        if col_reset.button("New Analysis"):
-            st.session_state.report_data = None
-            st.rerun()
+        # Combine and Display
+        all_data = yf_metrics + fv_metrics
+        if all_data:
+            df = pd.DataFrame(all_data)
+            # Displaying as HTML to ensure custom black/white styling
+            st.markdown(df.to_html(index=False, escape=False), unsafe_allow_html=True)
+        else:
+            st.error("No metrics could be retrieved.")
 
-        df = pd.DataFrame(st.session_state.report_data)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+# --- App Interface ---
+st.markdown("<h1>CEO Value Analysis</h1>", unsafe_allow_html=True)
 
-if __name__ == "__main__":
-    main()
+# Layout for input and button
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    ticker_input = st.text_input("Enter Ticker Symbol (e.g., TSLA, AAPL)", placeholder="Ticker here...")
+
+with col2:
+    st.write("##") # Spacing
+    btn = st.button("Generate Report")
+
+if btn:
+    generate_report(ticker_input)
