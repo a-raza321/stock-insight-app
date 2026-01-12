@@ -45,7 +45,7 @@ st.markdown("""
 if 'session' not in st.session_state:
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "DNT": "1",
@@ -84,37 +84,47 @@ def get_insider_sentiment(val_str):
 
 def scrape_yahoo_insider_stat(ticker):
     """
-    Directly scrapes the Statistics page for Insider %.
-    Refined specifically for Streamlit Cloud deployment using a shared session.
+    PRIORITY 1: Direct HTML Scraper for Yahoo Finance Statistics and Holders pages.
+    Specifically designed to bypass API rate limits on Streamlit Cloud.
     """
     insider_pct = "N/A"
+    
+    # Try the Statistics page first (often has the most direct table row)
     try:
         stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
         resp = st.session_state.session.get(stats_url, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Yahoo Finance key stats table rows
+            # Look for % Held by Insiders in any table row
             rows = soup.find_all("tr")
             for row in rows:
-                if "Held by Insiders" in row.text:
-                    # Look for the second td (the value)
+                row_text = row.get_text()
+                if "Held by Insiders" in row_text:
                     tds = row.find_all("td")
                     if len(tds) >= 2:
                         val = tds[1].text.strip()
-                        if "%" in val:
-                            return val
-            
-            # Backup: Search for specific labels in spans (common in newer layouts)
-            spans = soup.find_all("span")
-            for i, span in enumerate(spans):
-                if "Held by Insiders" in span.text:
-                    # Try to find the following span or parent's sibling
-                    parent_row = span.find_parent("tr")
-                    if parent_row:
-                        tds = parent_row.find_all("td")
-                        if len(tds) >= 2: return tds[1].text.strip()
+                        if "%" in val: return val
     except:
         pass
+
+    # Try the Holders page as secondary backup if Statistics fails
+    if insider_pct == "N/A":
+        try:
+            holders_url = f"https://finance.yahoo.com/quote/{ticker}/holders"
+            resp = st.session_state.session.get(holders_url, timeout=10)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                rows = soup.find_all("tr")
+                for row in rows:
+                    if "Insider" in row.text and "%" in row.text:
+                        tds = row.find_all("td")
+                        # Usually the percentage is in the first column for major holders summary
+                        if tds:
+                            val = tds[0].text.strip()
+                            if "%" in val: return val
+        except:
+            pass
+            
     return insider_pct
 
 def scrape_finviz_comprehensive(ticker):
@@ -162,6 +172,10 @@ def fetch_yfinance_comprehensive(ticker):
     Insider Ownership via aggressive fallbacks. Options expiration is skipped.
     """
     all_rows = []
+    
+    # HIGHEST PRIORITY: Scrape Insider Ownership first to ensure it's captured
+    ins_val = scrape_yahoo_insider_stat(ticker)
+    
     try:
         stock = yf.Ticker(ticker)
         
@@ -190,19 +204,16 @@ def fetch_yfinance_comprehensive(ticker):
             try: shares = stock.fast_info.get('shares_outstanding') or stock.fast_info.get('sharesOutstanding')
             except: shares = None
         
-        # If both info and fast_info fail (common in Cloud), derive from Cap and Price
+        # Derive from Cap and Price if necessary
         if not shares and m_cap and current_price:
             try: shares = float(m_cap) / float(current_price)
             except: shares = "N/A"
 
-        # 4. INSIDER OWNERSHIP % (Prioritize Scraping Fallback for Cloud)
-        ins_val = "N/A"
-        raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
-        if raw_ins and raw_ins != 'N/A' and isinstance(raw_ins, (int, float)):
-            ins_val = f"{float(raw_ins) * 100:.2f}%"
-        else:
-            # Info failed; scrape directly from key-statistics (Source labeled as Yahoo Finance)
-            ins_val = scrape_yahoo_insider_stat(ticker)
+        # 4. INSIDER OWNERSHIP % (Final check if scraping didn't find it but info did)
+        if ins_val == "N/A":
+            raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
+            if raw_ins and raw_ins != 'N/A' and isinstance(raw_ins, (int, float)):
+                ins_val = f"{float(raw_ins) * 100:.2f}%"
 
         # Build basic metrics table
         high_52 = info.get('fiftyTwoWeekHigh') or stock.fast_info.get('yearHigh') or 'N/A'
@@ -223,7 +234,7 @@ def fetch_yfinance_comprehensive(ticker):
         # Crucial Requirement: Maintain source as "Yahoo Finance"
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
-        # Financial Statements (Usually safer than .info on Cloud)
+        # Financial Statements
         q_bs = stock.quarterly_balance_sheet
         q_cf = stock.quarterly_cashflow
         
@@ -261,7 +272,9 @@ def fetch_yfinance_comprehensive(ticker):
         if "Too Many Requests" in str(e) or "429" in str(e):
             st.warning("Yahoo Finance Rate Limit Detected: Falling back to scraping methods for basic metrics.")
         else:
-            st.error(f"Error fetching Yahoo Finance data: {e}")
+            # Fallback specifically for the Insider metric if the rest fails
+            if not any(row['Metric Name'] == "Total Insider Ownership %" for row in all_rows):
+                all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
     return all_rows
 
 def main():
