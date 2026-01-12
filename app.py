@@ -9,6 +9,11 @@ import time
 from datetime import datetime
 import re
 import json
+import logging
+
+# Configure logging to Streamlit's console
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 
@@ -44,6 +49,7 @@ st.markdown("""
 
 # Enhanced session management for Streamlit Cloud
 if 'session' not in st.session_state:
+    logger.info("Initializing new requests session...")
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -58,11 +64,12 @@ if 'session' not in st.session_state:
         "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1"
     })
-    # Initial hit to get cookies
+    # Initial hit to establish session
     try:
         session.get("https://finance.yahoo.com", timeout=10)
-    except:
-        pass
+        logger.info("Session primed successfully.")
+    except Exception as e:
+        logger.error(f"Failed to prime session: {e}")
     st.session_state.session = session
 
 def format_ticker(ticker):
@@ -95,7 +102,7 @@ def get_insider_sentiment(val_str):
 
 def scrape_yahoo_insider_stat(ticker):
     """
-    CLOUD-OPTIMIZED Direct HTML Scraper for Yahoo Finance Insider Ownership.
+    ULTRA-ROBUST Direct HTML Scraper for Yahoo Finance Insider Ownership.
     Bypasses blocks by rotating logic and handling Streamlit Cloud session states.
     """
     insider_pct = "N/A"
@@ -104,15 +111,18 @@ def scrape_yahoo_insider_stat(ticker):
         f"https://finance.yahoo.com/quote/{ticker}/holders"
     ]
 
+    logger.info(f"Starting insider scraping for {ticker}")
+
     for url in urls:
         try:
-            # Small delay to prevent burst triggers on shared IPs
-            time.sleep(0.5)
-            resp = st.session_state.session.get(url, timeout=12)
+            time.sleep(1.0) # Ethical delay for cloud IP
+            resp = st.session_state.session.get(url, timeout=15)
             
-            # If 404, the ticker might be unique or Yahoo changed structure
-            if resp.status_code != 200: continue
+            if resp.status_code != 200:
+                logger.warning(f"Failed to load {url}, status code: {resp.status_code}")
+                continue
             
+            logger.info(f"Page loaded: {url}")
             soup = BeautifulSoup(resp.text, "html.parser")
             
             # 1. SEARCH VIA JSON METADATA (Hidden Store)
@@ -120,25 +130,28 @@ def scrape_yahoo_insider_stat(ticker):
             for script in scripts:
                 if script.string and 'root.App.main' in script.string:
                     try:
-                        # Extract the JSON block from the script
                         match = re.search(r'root\.App\.main\s*=\s*(\{.*?\});', script.string)
                         if match:
                             data = json.loads(match.group(1))
                             stores = data.get('context', {}).get('dispatcher', {}).get('stores', {})
                             quote_summary = stores.get('QuoteSummaryStore', {})
                             
-                            # Multiple paths for reliability
+                            # Log discovered keys for debugging in cloud
+                            logger.info(f"JSON Store found for {ticker}. Keys: {list(quote_summary.keys())[:5]}")
+
                             targets = [
                                 quote_summary.get('majorHoldersBreakdown', {}).get('heldPercentInsiders', {}).get('fmt'),
                                 quote_summary.get('defaultKeyStatistics', {}).get('heldPercentInsiders', {}).get('fmt')
                             ]
                             for t in targets:
-                                if t: return t
-                    except:
+                                if t:
+                                    logger.info(f"Insider data found in JSON: {t}")
+                                    return t
+                    except Exception as e:
+                        logger.error(f"JSON Parse Error for {ticker}: {e}")
                         continue
 
             # 2. SEARCH VIA TABLE ROWS
-            # Standard tables
             tables = soup.find_all("table")
             for table in tables:
                 rows = table.find_all("tr")
@@ -148,15 +161,21 @@ def scrape_yahoo_insider_stat(ticker):
                         tds = row.find_all("td")
                         if len(tds) >= 2:
                             val = tds[1].get_text(strip=True)
-                            if "%" in val: return val
+                            if "%" in val:
+                                logger.info(f"Insider data found in table: {val}")
+                                return val
             
             # 3. FALLBACK: REGEX ON BODY
             match = re.search(r'Held by Insiders.*?(\d+\.\d+%)', soup.get_text(), re.IGNORECASE | re.DOTALL)
-            if match: return match.group(1)
+            if match:
+                logger.info(f"Insider data found via Regex: {match.group(1)}")
+                return match.group(1)
 
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error scraping {url}: {e}")
             continue
             
+    logger.warning(f"Final: Could not find insider ownership for {ticker}")
     return insider_pct
 
 def scrape_finviz_comprehensive(ticker):
@@ -165,7 +184,6 @@ def scrape_finviz_comprehensive(ticker):
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
     results = []
-    # Finviz needs strict headers
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -302,8 +320,9 @@ def fetch_yfinance_comprehensive(ticker):
                 all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
 
     except Exception as e:
+        logger.error(f"Global yFinance fetch error: {e}")
         if "Too Many Requests" in str(e) or "429" in str(e):
-            st.warning("Yahoo Finance Rate Limit Detected: Falling back to scraping methods for basic metrics.")
+            st.warning("Yahoo Finance Rate Limit Detected: Falling back to scraping methods.")
         else:
             if not any(row['Metric Name'] == "Total Insider Ownership %" for row in all_rows):
                 all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
@@ -334,6 +353,7 @@ def main():
                     status_text.empty()
                     st.rerun()
                 except Exception as e:
+                    logger.critical(f"Analysis failed for {ticker}: {e}")
                     status_text.error(f"Analysis failed: {e}")
     else:
         col_title, col_reset = st.columns([8, 2])
@@ -347,6 +367,10 @@ def main():
             df = pd.DataFrame(st.session_state.report_data)
             df['Value'] = df['Value'].astype(str)
             st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            # Optional debug logs for user in case of "N/A"
+            with st.expander("Debug Details"):
+                st.write("If 'Total Insider Ownership %' is N/A, please check the Streamlit logs in the 'Manage App' dashboard.")
         else:
             st.info("No metric data found.")
 
