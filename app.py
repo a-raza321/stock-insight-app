@@ -84,46 +84,61 @@ def get_insider_sentiment(val_str):
 
 def scrape_yahoo_insider_stat(ticker):
     """
-    PRIORITY 1: Direct HTML Scraper for Yahoo Finance Statistics and Holders pages.
-    Specifically designed to bypass API rate limits on Streamlit Cloud.
+    Enhanced Direct HTML Scraper for Yahoo Finance Statistics and Holders pages.
+    Aggressively targets the 'Held by Insiders' metric.
     """
     insider_pct = "N/A"
     
-    # Try the Statistics page first (often has the most direct table row)
+    # Target URLs
+    stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
+    holders_url = f"https://finance.yahoo.com/quote/{ticker}/holders"
+
+    # Step 1: Try Key Statistics Page (Deep Search)
     try:
-        stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
         resp = st.session_state.session.get(stats_url, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Look for % Held by Insiders in any table row
-            rows = soup.find_all("tr")
-            for row in rows:
-                row_text = row.get_text()
-                if "Held by Insiders" in row_text:
-                    tds = row.find_all("td")
-                    if len(tds) >= 2:
-                        val = tds[1].text.strip()
-                        if "%" in val: return val
+            
+            # Technique 1: Find by text content in tables
+            tables = soup.find_all("table")
+            for table in tables:
+                rows = table.find_all("tr")
+                for row in rows:
+                    if "Held by Insiders" in row.get_text():
+                        tds = row.find_all("td")
+                        if len(tds) >= 2:
+                            val = tds[1].text.strip()
+                            if "%" in val: return val
+            
+            # Technique 2: Search for the label in any element and look for percentage near it
+            labels = soup.find_all(string=re.compile("Held by Insiders", re.I))
+            for label in labels:
+                parent = label.find_parent(["td", "tr", "div"])
+                if parent:
+                    text = parent.get_text()
+                    match = re.search(r'(\d+\.?\d*%)', text)
+                    if match: return match.group(1)
     except:
         pass
 
-    # Try the Holders page as secondary backup if Statistics fails
-    if insider_pct == "N/A":
-        try:
-            holders_url = f"https://finance.yahoo.com/quote/{ticker}/holders"
-            resp = st.session_state.session.get(holders_url, timeout=10)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                rows = soup.find_all("tr")
-                for row in rows:
-                    if "Insider" in row.text and "%" in row.text:
-                        tds = row.find_all("td")
-                        # Usually the percentage is in the first column for major holders summary
-                        if tds:
-                            val = tds[0].text.strip()
-                            if "%" in val: return val
-        except:
-            pass
+    # Step 2: Try Holders Page (Deep Search)
+    try:
+        resp = st.session_state.session.get(holders_url, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            
+            # Yahoo often puts summary stats in a specific table on the holders page
+            rows = soup.find_all("tr")
+            for row in rows:
+                row_text = row.get_text()
+                # Look for "insiders" and "%" in the same row
+                if "insider" in row_text.lower() and "%" in row_text:
+                    tds = row.find_all("td")
+                    for td in tds:
+                        val = td.text.strip()
+                        if "%" in val: return val
+    except:
+        pass
             
     return insider_pct
 
@@ -169,17 +184,17 @@ def scrape_finviz_comprehensive(ticker):
 def fetch_yfinance_comprehensive(ticker):
     """
     Fetches core metrics with specific focus on fixing Shares Outstanding and 
-    Insider Ownership via aggressive fallbacks. Options expiration is skipped.
+    Insider Ownership via aggressive fallbacks.
     """
     all_rows = []
     
-    # HIGHEST PRIORITY: Scrape Insider Ownership first to ensure it's captured
+    # HIGHEST PRIORITY: Scrape Insider Ownership first via enhanced method
     ins_val = scrape_yahoo_insider_stat(ticker)
     
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. ATTEMPT INFO (Fails frequently on Streamlit Cloud)
+        # 1. ATTEMPT INFO
         info = {}
         try:
             info = stock.info
@@ -187,7 +202,7 @@ def fetch_yfinance_comprehensive(ticker):
         except:
             info = {}
 
-        # 2. PRICE & MARKET CAP (Layered Fallback using fast_info)
+        # 2. PRICE & MARKET CAP
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not current_price:
             try: current_price = stock.fast_info.get('last_price') or stock.fast_info.get('lastPrice')
@@ -198,13 +213,12 @@ def fetch_yfinance_comprehensive(ticker):
             try: m_cap = stock.fast_info.get('market_cap') or stock.fast_info.get('marketCap')
             except: m_cap = None
 
-        # 3. SHARES OUTSTANDING (Calculated Fallback for Cloud Stability)
+        # 3. SHARES OUTSTANDING
         shares = info.get('sharesOutstanding')
         if not shares:
             try: shares = stock.fast_info.get('shares_outstanding') or stock.fast_info.get('sharesOutstanding')
             except: shares = None
         
-        # Derive from Cap and Price if necessary
         if not shares and m_cap and current_price:
             try: shares = float(m_cap) / float(current_price)
             except: shares = "N/A"
@@ -272,7 +286,6 @@ def fetch_yfinance_comprehensive(ticker):
         if "Too Many Requests" in str(e) or "429" in str(e):
             st.warning("Yahoo Finance Rate Limit Detected: Falling back to scraping methods for basic metrics.")
         else:
-            # Fallback specifically for the Insider metric if the rest fails
             if not any(row['Metric Name'] == "Total Insider Ownership %" for row in all_rows):
                 all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
     return all_rows
@@ -314,7 +327,7 @@ def main():
         if st.session_state.report_data:
             df = pd.DataFrame(st.session_state.report_data)
             df['Value'] = df['Value'].astype(str)
-            st.dataframe(df, width='stretch', hide_index=True)
+            st.dataframe(df, width='stretch', use_container_width=True, hide_index=True)
         else:
             st.info("No metric data found.")
 
