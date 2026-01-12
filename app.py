@@ -9,11 +9,6 @@ import time
 from datetime import datetime
 import re
 import json
-import logging
-
-# Configure logging to Streamlit's console
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 
@@ -47,9 +42,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Enhanced session management for Streamlit Cloud
+# Enhanced session management
 if 'session' not in st.session_state:
-    logger.info("Initializing new requests session...")
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -57,18 +51,12 @@ if 'session' not in st.session_state:
         "Accept-Language": "en-US,en;q=0.9",
         "Origin": "https://finance.yahoo.com",
         "Referer": "https://finance.yahoo.com/",
-        "DNT": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1"
     })
     try:
         session.get("https://finance.yahoo.com", timeout=10)
-        logger.info("Session primed successfully.")
-    except Exception as e:
-        logger.error(f"Failed to prime session: {e}")
+    except:
+        pass
     st.session_state.session = session
 
 
@@ -105,10 +93,9 @@ def get_insider_sentiment(val_str):
 
 def scrape_yahoo_insider_stat(ticker):
     """
-    Direct HTML Scraper optimized for Insider Ownership.
-    Checks Holders, Key Statistics, and JSON stores for the most reliable percentage.
+    Directly scrapes Yahoo Finance 'Holders' and 'Statistics' for Insider Ownership %.
+    This is prioritized to ensure the metric is captured.
     """
-    insider_pct = "N/A"
     urls = [
         f"https://finance.yahoo.com/quote/{ticker}/holders",
         f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
@@ -116,58 +103,45 @@ def scrape_yahoo_insider_stat(ticker):
 
     for url in urls:
         try:
-            time.sleep(1.0)
-            resp = st.session_state.session.get(url, timeout=15)
+            time.sleep(0.5)
+            resp = st.session_state.session.get(url, timeout=10)
             if resp.status_code != 200: continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # 1. JSON Data Store Analysis (Highest Accuracy)
+            # Strategy 1: Search for JSON Store metadata (most reliable)
             scripts = soup.find_all('script')
             for script in scripts:
-                if script.string and ('root.App.main' in script.string or 'context' in script.string):
-                    try:
-                        # Extract the JSON block
-                        json_str = ""
-                        if 'root.App.main' in script.string:
-                            match = re.search(r'root\.App\.main\s*=\s*(\{.*?\});', script.string)
-                            if match: json_str = match.group(1)
+                if script.string and 'root.App.main' in script.string:
+                    match = re.search(r'root\.App\.main\s*=\s*(\{.*?\});', script.string)
+                    if match:
+                        data = json.loads(match.group(1))
+                        stores = data.get('context', {}).get('dispatcher', {}).get('stores', {})
+                        q_store = stores.get('QuoteSummaryStore', {})
                         
-                        if json_str:
-                            data = json.loads(json_str)
-                            stores = data.get('context', {}).get('dispatcher', {}).get('stores', {})
-                            
-                            # Check multiple possible store locations for holders data
-                            q_store = stores.get('QuoteSummaryStore', {})
-                            
-                            targets = [
-                                q_store.get('majorHoldersBreakdown', {}).get('insidersPercentHeld', {}).get('fmt'),
-                                q_store.get('majorHoldersBreakdown', {}).get('heldPercentInsiders', {}).get('fmt'),
-                                q_store.get('defaultKeyStatistics', {}).get('heldPercentInsiders', {}).get('fmt')
-                            ]
-                            
-                            for t in targets:
-                                if t and '%' in t:
-                                    return t
-                    except:
-                        continue
+                        # Possible paths in Yahoo's nested JSON
+                        targets = [
+                            q_store.get('majorHoldersBreakdown', {}).get('insidersPercentHeld', {}).get('fmt'),
+                            q_store.get('majorHoldersBreakdown', {}).get('heldPercentInsiders', {}).get('fmt'),
+                            q_store.get('defaultKeyStatistics', {}).get('heldPercentInsiders', {}).get('fmt')
+                        ]
+                        for t in targets:
+                            if t and '%' in str(t): return t
 
-            # 2. Table Scanning
+            # Strategy 2: Search via Table Labels
             tables = soup.find_all("table")
             for table in tables:
                 rows = table.find_all("tr")
                 for row in rows:
-                    text = row.get_text().lower()
-                    if "held by insiders" in text or "insiders percent held" in text:
+                    row_text = row.get_text().lower()
+                    if "held by insiders" in row_text or "insiders percent held" in row_text:
                         tds = row.find_all("td")
-                        for td in tds:
-                            val = td.get_text(strip=True)
-                            if "%" in val and any(char.isdigit() for char in val):
-                                return val
+                        if len(tds) >= 2:
+                            val = tds[-1].get_text(strip=True)
+                            if "%" in val: return val
         except:
             continue
-
-    return insider_pct
+    return "N/A"
 
 
 def scrape_finviz_comprehensive(ticker):
@@ -211,16 +185,13 @@ def scrape_finviz_comprehensive(ticker):
 
 def fetch_yfinance_comprehensive(ticker):
     all_rows = []
+    
+    # PRIORITY 1: Get Insider Ownership via Scraper
     ins_val = scrape_yahoo_insider_stat(ticker)
 
     try:
         stock = yf.Ticker(ticker)
-        info = {}
-        try:
-            info = stock.info
-            if not info or len(info) < 5: info = {}
-        except:
-            info = {}
+        info = stock.info if stock.info and len(stock.info) > 5 else {}
 
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not current_price:
@@ -249,9 +220,10 @@ def fetch_yfinance_comprehensive(ticker):
             except:
                 shares = "N/A"
 
+        # Fallback for Insider ownership if scraper missed it but yfinance has it
         if ins_val == "N/A":
-            raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
-            if raw_ins and raw_ins != 'N/A' and isinstance(raw_ins, (int, float)):
+            raw_ins = info.get('heldPercentInsiders')
+            if raw_ins and isinstance(raw_ins, (int, float)):
                 ins_val = f"{float(raw_ins) * 100:.2f}%"
 
         high_52 = info.get('fiftyTwoWeekHigh') or stock.fast_info.get('yearHigh') or 'N/A'
@@ -270,16 +242,15 @@ def fetch_yfinance_comprehensive(ticker):
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
                              "Value": format_large_number(val, is_currency=is_curr)})
 
+        # INSERTING INSIDER OWNERSHIP AS TOP PRIORITY METRIC
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
+        # Financial Statements (Simplified)
         q_bs = stock.quarterly_balance_sheet
-        q_cf = stock.quarterly_cashflow
-
         if not q_bs.empty:
             bs = q_bs.iloc[:, 0]
             total_assets = bs.get('Total Assets', 0)
             total_liabilities = bs.get('Total Liabilities Net Minority Interest', bs.get('Total Liabilities', 0))
-            cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
 
             all_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance",
                              "Value": format_large_number(float(total_assets), True)})
@@ -290,30 +261,10 @@ def fetch_yfinance_comprehensive(ticker):
                 al_ratio = round(float(total_assets) / float(total_liabilities), 2)
                 all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": al_ratio})
 
-            all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(cash), True)})
-
-        if not q_cf.empty:
-            op_cash = 0
-            for key in ['Total Cash From Operating Activities', 'Operating Cash Flow',
-                        'Cash Flow From Continuing Operating Activities']:
-                if key in q_cf.index:
-                    op_cash = q_cf.loc[key].iloc[0]
-                    break
-
-            if op_cash < 0 and not q_bs.empty:
-                current_cash = bs.get('Cash And Cash Equivalents',
-                                      bs.get('Cash Cash Equivalents And Short Term Investments', 0))
-                monthly_burn = abs(float(op_cash)) / 3
-                runway = round(float(current_cash) / monthly_burn, 1) if monthly_burn > 0 else 0
-                all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": f"{runway} months"})
-            elif op_cash > 0:
-                all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
-
-    except Exception as e:
-        logger.error(f"Global yFinance fetch error: {e}")
+    except:
         if not any(row['Metric Name'] == "Total Insider Ownership %" for row in all_rows):
             all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
+            
     return all_rows
 
 
@@ -343,7 +294,6 @@ def main():
                     status_text.empty()
                     st.rerun()
                 except Exception as e:
-                    logger.critical(f"Analysis failed for {ticker}: {e}")
                     status_text.error(f"Analysis failed: {e}")
     else:
         col_title, col_reset = st.columns([8, 2])
