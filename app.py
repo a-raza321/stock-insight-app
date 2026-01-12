@@ -5,6 +5,7 @@ import requests
 import numpy as np
 from bs4 import BeautifulSoup
 import warnings
+import time
 
 warnings.filterwarnings("ignore")
 
@@ -117,16 +118,38 @@ def scrape_finviz_comprehensive(ticker):
 def fetch_yfinance_comprehensive(ticker):
     """
     Fetches core metrics from Yahoo Finance info and financial statements sequentially.
+    Optimized for Streamlit Cloud to reduce 'Too Many Requests' errors.
     """
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
+
+        # Using .info often triggers rate limits on Streamlit Cloud/GitHub.
+        # We try to get basic price data from .fast_info as a fallback if .info fails.
+        try:
+            info = stock.info
+        except Exception:
+            info = {}
+
+        # Basic Market Metrics - Hybrid approach for reliability
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        if current_price is None:
+            try:
+                current_price = stock.fast_info.get('last_price')
+            except:
+                current_price = 'N/A'
+
+        market_cap = info.get('marketCap')
+        if market_cap is None:
+            try:
+                market_cap = stock.fast_info.get('market_cap')
+            except:
+                market_cap = 'N/A'
 
         basic_metrics = [
             ("Company Name", info.get('longName', ticker), False),
-            ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A')), True),
-            ("Market Cap", info.get('marketCap', 'N/A'), True),
+            ("Current Stock Price", current_price, True),
+            ("Market Cap", market_cap, True),
             ("Shares Outstanding", info.get('sharesOutstanding', 'N/A'), False),
             ("52 Week High", info.get('fiftyTwoWeekHigh', 'N/A'), True),
             ("52 Week Low", info.get('fiftyTwoWeekLow', 'N/A'), True)
@@ -193,7 +216,11 @@ def fetch_yfinance_comprehensive(ticker):
                 all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
 
     except Exception as e:
-        st.error(f"Error fetching Yahoo Finance data: {e}")
+        if "Too Many Requests" in str(e) or "429" in str(e):
+            st.warning(
+                "Yahoo Finance rate limit hit. This often happens on shared cloud hosting (Streamlit/GitHub). Try again in a few minutes or run locally.")
+        else:
+            st.error(f"Error fetching Yahoo Finance data: {e}")
     return all_rows
 
 
