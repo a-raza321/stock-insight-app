@@ -41,6 +41,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Create a persistent session for requests to handle cookies/headers better in cloud environments
+if 'session' not in st.session_state:
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    })
+    st.session_state.session = session
+
 def format_ticker(ticker):
     return ticker.strip().upper()
 
@@ -72,37 +85,35 @@ def get_insider_sentiment(val_str):
 def scrape_yahoo_insider_stat(ticker):
     """
     Directly scrapes the Statistics page for Insider %.
-    Uses multiple backup selectors for reliability on different YF layouts.
+    Refined specifically for Streamlit Cloud deployment using a shared session.
     """
     insider_pct = "N/A"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-    
     try:
         stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
-        resp = requests.get(stats_url, headers=headers, timeout=10)
+        resp = st.session_state.session.get(stats_url, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Yahoo often hides data in different table formats; we search for the specific text
-            search_text = "Held by Insiders"
+            # Yahoo Finance key stats table rows
+            rows = soup.find_all("tr")
+            for row in rows:
+                if "Held by Insiders" in row.text:
+                    # Look for the second td (the value)
+                    tds = row.find_all("td")
+                    if len(tds) >= 2:
+                        val = tds[1].text.strip()
+                        if "%" in val:
+                            return val
             
-            # Method 1: Find row by text and get next cell
-            target_row = soup.find("tr", string=re.compile(search_text, re.IGNORECASE))
-            if not target_row:
-                # Method 2: Iterate through all rows if simple find fails
-                for row in soup.find_all("tr"):
-                    row_text = row.get_text()
-                    if search_text in row_text:
-                        tds = row.find_all("td")
-                        if len(tds) >= 2:
-                            # Usually the percentage is in the second or last column
-                            potential_val = tds[-1].text.strip()
-                            if "%" in potential_val:
-                                return potential_val
-            else:
-                tds = target_row.find_all("td")
-                if len(tds) >= 2:
-                    return tds[1].text.strip()
-    except Exception:
+            # Backup: Search for specific labels in spans (common in newer layouts)
+            spans = soup.find_all("span")
+            for i, span in enumerate(spans):
+                if "Held by Insiders" in span.text:
+                    # Try to find the following span or parent's sibling
+                    parent_row = span.find_parent("tr")
+                    if parent_row:
+                        tds = parent_row.find_all("td")
+                        if len(tds) >= 2: return tds[1].text.strip()
+    except:
         pass
     return insider_pct
 
@@ -111,10 +122,9 @@ def scrape_finviz_comprehensive(ticker):
     Scrapes the Finviz snapshot table for metrics previously required.
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     results = []
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = st.session_state.session.get(url, timeout=10)
         if resp.status_code != 200: return results
         soup = BeautifulSoup(resp.text, "html.parser")
         table = soup.find("table", class_="snapshot-table2")
@@ -155,15 +165,15 @@ def fetch_yfinance_comprehensive(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. ATTEMPT INFO
+        # 1. ATTEMPT INFO (Fails frequently on Streamlit Cloud)
         info = {}
         try:
             info = stock.info
-            if not info: info = {}
+            if not info or len(info) < 5: info = {}
         except:
             info = {}
 
-        # 2. PRICE & MARKET CAP
+        # 2. PRICE & MARKET CAP (Layered Fallback using fast_info)
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not current_price:
             try: current_price = stock.fast_info.get('last_price') or stock.fast_info.get('lastPrice')
@@ -174,23 +184,24 @@ def fetch_yfinance_comprehensive(ticker):
             try: m_cap = stock.fast_info.get('market_cap') or stock.fast_info.get('marketCap')
             except: m_cap = None
 
-        # 3. SHARES OUTSTANDING
+        # 3. SHARES OUTSTANDING (Calculated Fallback for Cloud Stability)
         shares = info.get('sharesOutstanding')
         if not shares:
             try: shares = stock.fast_info.get('shares_outstanding') or stock.fast_info.get('sharesOutstanding')
             except: shares = None
         
+        # If both info and fast_info fail (common in Cloud), derive from Cap and Price
         if not shares and m_cap and current_price:
             try: shares = float(m_cap) / float(current_price)
             except: shares = "N/A"
 
-        # 4. INSIDER OWNERSHIP % (Aggressive Fallback)
+        # 4. INSIDER OWNERSHIP % (Prioritize Scraping Fallback for Cloud)
         ins_val = "N/A"
         raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
         if raw_ins and raw_ins != 'N/A' and isinstance(raw_ins, (int, float)):
             ins_val = f"{float(raw_ins) * 100:.2f}%"
         else:
-            # Fallback to direct scraping of the stats page - label as "Yahoo Finance"
+            # Info failed; scrape directly from key-statistics (Source labeled as Yahoo Finance)
             ins_val = scrape_yahoo_insider_stat(ticker)
 
         # Build basic metrics table
@@ -209,9 +220,10 @@ def fetch_yfinance_comprehensive(ticker):
         for name, val, is_curr in basic_metrics:
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val, is_currency=is_curr)})
 
+        # Crucial Requirement: Maintain source as "Yahoo Finance"
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
-        # Financial Statements
+        # Financial Statements (Usually safer than .info on Cloud)
         q_bs = stock.quarterly_balance_sheet
         q_cf = stock.quarterly_cashflow
         
@@ -247,7 +259,7 @@ def fetch_yfinance_comprehensive(ticker):
 
     except Exception as e:
         if "Too Many Requests" in str(e) or "429" in str(e):
-            st.warning("Yahoo Finance Rate Limit: Some data recovered via specialized scrapers.")
+            st.warning("Yahoo Finance Rate Limit Detected: Falling back to scraping methods for basic metrics.")
         else:
             st.error(f"Error fetching Yahoo Finance data: {e}")
     return all_rows
