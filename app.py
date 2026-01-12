@@ -69,46 +69,27 @@ def get_insider_sentiment(val_str):
     except:
         return "N/A"
 
-def scrape_yahoo_extra_metrics(ticker):
+def scrape_yahoo_insider_stat(ticker):
     """
-    Directly scrapes the Statistics page for Insider % and the Options page for Expiration.
-    This is the most aggressive fallback for cloud environments.
+    Directly scrapes the Statistics page for Insider %.
     """
-    data = {"insider_pct": "N/A", "latest_option": "N/A"}
+    insider_pct = "N/A"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     
-    # 1. Scrape Statistics Page for Insider %
     try:
         stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
         resp = requests.get(stats_url, headers=headers, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Target tables that contain 'Held by Insiders'
             for row in soup.find_all("tr"):
                 if "Held by Insiders" in row.text:
                     tds = row.find_all("td")
                     if len(tds) >= 2:
-                        data["insider_pct"] = tds[1].text.strip()
+                        insider_pct = tds[1].text.strip()
                         break
     except:
         pass
-
-    # 2. Scrape Options Page for Expiration Date
-    try:
-        opt_url = f"https://finance.yahoo.com/quote/{ticker}/options"
-        resp = requests.get(opt_url, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            # Expirations are often in a dropdown/select element or span
-            # Pattern matching for dates in the format like 'January 17, 2025'
-            opt_dates = soup.find_all(string=re.compile(r'[A-Z][a-z]+ \d{1,2}, \d{4}'))
-            if opt_dates:
-                # Get the latest one (usually the last in the list or the most distant)
-                data["latest_option"] = opt_dates[-1].strip()
-    except:
-        pass
-
-    return data
+    return insider_pct
 
 def scrape_finviz_comprehensive(ticker):
     """
@@ -152,16 +133,13 @@ def scrape_finviz_comprehensive(ticker):
 
 def fetch_yfinance_comprehensive(ticker):
     """
-    Fetches core metrics with specific focus on fixing Shares Outstanding, 
-    Insider Ownership, and Options Expiration via aggressive fallbacks.
+    Fetches core metrics with specific focus on fixing Shares Outstanding and 
+    Insider Ownership via aggressive fallbacks. Options expiration is skipped.
     """
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
         
-        # Aggressively scrape extra metrics via HTML first (it's often more reliable in cloud)
-        scraped_extra = scrape_yahoo_extra_metrics(ticker)
-
         # 1. ATTEMPT INFO
         info = {}
         try:
@@ -191,24 +169,14 @@ def fetch_yfinance_comprehensive(ticker):
             try: shares = float(m_cap) / float(current_price)
             except: shares = "N/A"
 
-        # 4. INSIDER OWNERSHIP % (API -> Scraped Fallback)
+        # 4. INSIDER OWNERSHIP % (Aggressive Fallback)
         ins_val = "N/A"
         raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
         if raw_ins and raw_ins != 'N/A':
             ins_val = f"{float(raw_ins) * 100:.2f}%"
         else:
-            ins_val = scraped_extra["insider_pct"]
-
-        # 5. OPTIONS EXPIRATION (API -> Scraped Fallback)
-        latest_opt = "N/A"
-        try:
-            expirations = stock.options
-            if expirations and len(expirations) > 0:
-                latest_opt = str(expirations[-1])
-            else:
-                latest_opt = scraped_extra["latest_option"]
-        except:
-            latest_opt = scraped_extra["latest_option"]
+            # Fallback to direct scraping of the stats page
+            ins_val = scrape_yahoo_insider_stat(ticker)
 
         # Build basic metrics table
         high_52 = info.get('fiftyTwoWeekHigh') or stock.fast_info.get('yearHigh') or 'N/A'
@@ -226,8 +194,7 @@ def fetch_yfinance_comprehensive(ticker):
         for name, val, is_curr in basic_metrics:
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val, is_currency=is_curr)})
 
-        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance (Statistics Scraper)", "Value": ins_val})
-        all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance (Options Scraper)", "Value": latest_opt})
+        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
         # Financial Statements
         q_bs = stock.quarterly_balance_sheet
@@ -265,7 +232,7 @@ def fetch_yfinance_comprehensive(ticker):
 
     except Exception as e:
         if "Too Many Requests" in str(e) or "429" in str(e):
-            st.warning("Yahoo Finance Rate Limit: Some data recovered via specialized Statistics and Options scrapers.")
+            st.warning("Yahoo Finance Rate Limit: Some data recovered via specialized scrapers.")
         else:
             st.error(f"Error fetching Yahoo Finance data: {e}")
     return all_rows
