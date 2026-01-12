@@ -8,6 +8,7 @@ import warnings
 import time
 from datetime import datetime
 import re
+import json
 
 warnings.filterwarnings("ignore")
 
@@ -41,17 +42,27 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Create a persistent session for requests to handle cookies/headers better in cloud environments
+# Enhanced session management for Streamlit Cloud
 if 'session' not in st.session_state:
     session = requests.Session()
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Origin": "https://finance.yahoo.com",
+        "Referer": "https://finance.yahoo.com/",
         "DNT": "1",
-        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
         "Upgrade-Insecure-Requests": "1"
     })
+    # Initial hit to get cookies
+    try:
+        session.get("https://finance.yahoo.com", timeout=10)
+    except:
+        pass
     st.session_state.session = session
 
 def format_ticker(ticker):
@@ -84,61 +95,67 @@ def get_insider_sentiment(val_str):
 
 def scrape_yahoo_insider_stat(ticker):
     """
-    Enhanced Direct HTML Scraper for Yahoo Finance Statistics and Holders pages.
-    Aggressively targets the 'Held by Insiders' metric.
+    CLOUD-OPTIMIZED Direct HTML Scraper for Yahoo Finance Insider Ownership.
+    Bypasses blocks by rotating logic and handling Streamlit Cloud session states.
     """
     insider_pct = "N/A"
-    
-    # Target URLs
-    stats_url = f"https://finance.yahoo.com/quote/{ticker}/key-statistics"
-    holders_url = f"https://finance.yahoo.com/quote/{ticker}/holders"
+    urls = [
+        f"https://finance.yahoo.com/quote/{ticker}/key-statistics",
+        f"https://finance.yahoo.com/quote/{ticker}/holders"
+    ]
 
-    # Step 1: Try Key Statistics Page (Deep Search)
-    try:
-        resp = st.session_state.session.get(stats_url, timeout=10)
-        if resp.status_code == 200:
+    for url in urls:
+        try:
+            # Small delay to prevent burst triggers on shared IPs
+            time.sleep(0.5)
+            resp = st.session_state.session.get(url, timeout=12)
+            
+            # If 404, the ticker might be unique or Yahoo changed structure
+            if resp.status_code != 200: continue
+            
             soup = BeautifulSoup(resp.text, "html.parser")
             
-            # Technique 1: Find by text content in tables
+            # 1. SEARCH VIA JSON METADATA (Hidden Store)
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string and 'root.App.main' in script.string:
+                    try:
+                        # Extract the JSON block from the script
+                        match = re.search(r'root\.App\.main\s*=\s*(\{.*?\});', script.string)
+                        if match:
+                            data = json.loads(match.group(1))
+                            stores = data.get('context', {}).get('dispatcher', {}).get('stores', {})
+                            quote_summary = stores.get('QuoteSummaryStore', {})
+                            
+                            # Multiple paths for reliability
+                            targets = [
+                                quote_summary.get('majorHoldersBreakdown', {}).get('heldPercentInsiders', {}).get('fmt'),
+                                quote_summary.get('defaultKeyStatistics', {}).get('heldPercentInsiders', {}).get('fmt')
+                            ]
+                            for t in targets:
+                                if t: return t
+                    except:
+                        continue
+
+            # 2. SEARCH VIA TABLE ROWS
+            # Standard tables
             tables = soup.find_all("table")
             for table in tables:
                 rows = table.find_all("tr")
                 for row in rows:
-                    if "Held by Insiders" in row.get_text():
+                    row_text = row.get_text().lower()
+                    if "held by insiders" in row_text:
                         tds = row.find_all("td")
                         if len(tds) >= 2:
-                            val = tds[1].text.strip()
+                            val = tds[1].get_text(strip=True)
                             if "%" in val: return val
             
-            # Technique 2: Search for the label in any element and look for percentage near it
-            labels = soup.find_all(string=re.compile("Held by Insiders", re.I))
-            for label in labels:
-                parent = label.find_parent(["td", "tr", "div"])
-                if parent:
-                    text = parent.get_text()
-                    match = re.search(r'(\d+\.?\d*%)', text)
-                    if match: return match.group(1)
-    except:
-        pass
+            # 3. FALLBACK: REGEX ON BODY
+            match = re.search(r'Held by Insiders.*?(\d+\.\d+%)', soup.get_text(), re.IGNORECASE | re.DOTALL)
+            if match: return match.group(1)
 
-    # Step 2: Try Holders Page (Deep Search)
-    try:
-        resp = st.session_state.session.get(holders_url, timeout=10)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Yahoo often puts summary stats in a specific table on the holders page
-            rows = soup.find_all("tr")
-            for row in rows:
-                row_text = row.get_text()
-                # Look for "insiders" and "%" in the same row
-                if "insider" in row_text.lower() and "%" in row_text:
-                    tds = row.find_all("td")
-                    for td in tds:
-                        val = td.text.strip()
-                        if "%" in val: return val
-    except:
-        pass
+        except Exception:
+            continue
             
     return insider_pct
 
@@ -148,8 +165,10 @@ def scrape_finviz_comprehensive(ticker):
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
     results = []
+    # Finviz needs strict headers
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        resp = st.session_state.session.get(url, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code != 200: return results
         soup = BeautifulSoup(resp.text, "html.parser")
         table = soup.find("table", class_="snapshot-table2")
@@ -188,7 +207,7 @@ def fetch_yfinance_comprehensive(ticker):
     """
     all_rows = []
     
-    # HIGHEST PRIORITY: Scrape Insider Ownership first via enhanced method
+    # HIGHEST PRIORITY: Scrape Insider Ownership first via the new multi-layered method
     ins_val = scrape_yahoo_insider_stat(ticker)
     
     try:
@@ -327,7 +346,7 @@ def main():
         if st.session_state.report_data:
             df = pd.DataFrame(st.session_state.report_data)
             df['Value'] = df['Value'].astype(str)
-            st.dataframe(df, width='stretch', use_container_width=True, hide_index=True)
+            st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info("No metric data found.")
 
