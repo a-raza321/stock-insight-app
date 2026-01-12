@@ -71,23 +71,25 @@ def get_insider_sentiment(val_str):
 def scrape_yahoo_insider_percent(ticker):
     """
     Direct HTML Scraper for Yahoo Finance Holders page.
-    This bypasses the yfinance 'info' API rate limits.
+    Targets specific patterns in the Major Holders table.
     """
     url = f"https://finance.yahoo.com/quote/{ticker}/holders"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Yahoo usually displays this in a table under 'Major Holders'
-            # Look for '% of Shares Held by All Insider'
+            # Yahoo often places the percentage in the first <td> of a row 
+            # where the second <td> contains the text description
             rows = soup.find_all("tr")
             for row in rows:
-                if "Insider" in row.text and "%" in row.text:
+                text = row.text.lower()
+                if "shares held by all insider" in text or "insiders" in text:
                     tds = row.find_all("td")
-                    if len(tds) >= 1:
-                        val = tds[0].text.strip()
-                        if "%" in val: return val
+                    for td in tds:
+                        val = td.text.strip()
+                        if "%" in val:
+                            return val
     except:
         pass
     return "N/A"
@@ -97,7 +99,7 @@ def scrape_finviz_comprehensive(ticker):
     Scrapes the Finviz snapshot table for metrics previously required.
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
     results = []
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -141,7 +143,7 @@ def fetch_yfinance_comprehensive(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. ATTEMPT INFO (Can be None in Cloud)
+        # 1. ATTEMPT INFO
         info = {}
         try:
             info = stock.info
@@ -149,7 +151,7 @@ def fetch_yfinance_comprehensive(ticker):
         except:
             info = {}
 
-        # 2. PRICE & MARKET CAP (Layered Fallback)
+        # 2. PRICE & MARKET CAP
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not current_price:
             try: current_price = stock.fast_info.get('last_price') or stock.fast_info.get('lastPrice')
@@ -160,32 +162,36 @@ def fetch_yfinance_comprehensive(ticker):
             try: m_cap = stock.fast_info.get('market_cap') or stock.fast_info.get('marketCap')
             except: m_cap = None
 
-        # 3. SHARES OUTSTANDING (Calculated Fallback - Most Robust)
+        # 3. SHARES OUTSTANDING (Calculated Fallback)
         shares = info.get('sharesOutstanding')
         if not shares:
             try: shares = stock.fast_info.get('shares_outstanding') or stock.fast_info.get('sharesOutstanding')
             except: shares = None
         
-        # If still None, calculate from MCap and Price
         if not shares and m_cap and current_price:
             try: shares = float(m_cap) / float(current_price)
             except: shares = "N/A"
 
-        # 4. INSIDER OWNERSHIP % (Direct Scraper Fallback)
+        # 4. INSIDER OWNERSHIP % (Aggressive Fallback)
         ins_val = "N/A"
         raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
-        if raw_ins:
-            ins_val = f"{raw_ins * 100:.2f}%"
+        if raw_ins and raw_ins != 'N/A':
+            ins_val = f"{float(raw_ins) * 100:.2f}%"
         else:
-            # Info failed, try direct HTML scraping
+            # Info failed or N/A, try direct scraping
             ins_val = scrape_yahoo_insider_percent(ticker)
 
-        # 5. OPTIONS EXPIRATION (Robust Check)
+        # 5. OPTIONS EXPIRATION (Retry Logic)
         latest_opt = "N/A"
         try:
             expirations = stock.options
             if expirations and len(expirations) > 0:
                 latest_opt = str(expirations[-1])
+            else:
+                # If .options is empty, try a refresh or direct check
+                time.sleep(0.5)
+                expirations = stock.options
+                if expirations: latest_opt = str(expirations[-1])
         except:
             latest_opt = "N/A"
 
@@ -205,14 +211,13 @@ def fetch_yfinance_comprehensive(ticker):
         for name, val, is_curr in basic_metrics:
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val, is_currency=is_curr)})
 
-        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance (Scraped Fallback)", "Value": ins_val})
+        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance (Fallback Scraper)", "Value": ins_val})
         all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": latest_opt})
 
         # Financial Statements
         q_bs = stock.quarterly_balance_sheet
         q_cf = stock.quarterly_cashflow
-        q_is = stock.quarterly_financials
-
+        
         if not q_bs.empty:
             bs = q_bs.iloc[:, 0]
             total_assets = bs.get('Total Assets', 0)
@@ -227,11 +232,6 @@ def fetch_yfinance_comprehensive(ticker):
                 all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": al_ratio})
 
             all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance", "Value": format_large_number(float(cash), True)})
-
-        if not q_is.empty:
-            is_data = q_is.iloc[:, 0]
-            op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
-            all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance", "Value": format_large_number(float(op_exp), True)})
 
         if not q_cf.empty:
             op_cash = 0
@@ -250,7 +250,7 @@ def fetch_yfinance_comprehensive(ticker):
 
     except Exception as e:
         if "Too Many Requests" in str(e) or "429" in str(e):
-            st.warning("Yahoo Finance Rate Limit: Some market data fetched via backup scraping methods.")
+            st.warning("Yahoo Finance Rate Limit: Some data recovered via backup scrapers.")
         else:
             st.error(f"Error fetching Yahoo Finance data: {e}")
     return all_rows
