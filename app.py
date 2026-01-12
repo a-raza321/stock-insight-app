@@ -39,10 +39,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-
 def format_ticker(ticker):
     return ticker.strip().upper()
-
 
 def format_large_number(val, is_currency=True):
     if not isinstance(val, (int, float)): return val
@@ -59,7 +57,6 @@ def format_large_number(val, is_currency=True):
     except:
         return val
 
-
 def get_insider_sentiment(val_str):
     if val_str in ["N/A", "-", ""]: return "N/A"
     try:
@@ -70,15 +67,12 @@ def get_insider_sentiment(val_str):
     except:
         return "N/A"
 
-
 def scrape_finviz_comprehensive(ticker):
     """
     Scrapes the Finviz snapshot table for metrics previously required.
-    Sequential execution only.
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
     results = []
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -86,17 +80,17 @@ def scrape_finviz_comprehensive(ticker):
         soup = BeautifulSoup(resp.text, "html.parser")
         table = soup.find("table", class_="snapshot-table2")
         if not table: return results
-
+        
         data_map = {}
         rows = table.find_all("tr")
         for row in rows:
             cols = row.find_all("td")
             for i in range(0, len(cols), 2):
                 key = cols[i].text.strip()
-                val = cols[i + 1].text.strip()
+                val = cols[i+1].text.strip()
                 if key:
                     data_map[key] = val
-
+        
         metrics_to_pick = {
             "Insider Trans": "Net Insider Buying vs Selling %",
             "Inst Own": "Institutional Ownership %",
@@ -108,56 +102,74 @@ def scrape_finviz_comprehensive(ticker):
             if f_key in data_map:
                 results.append({"Metric Name": display_name, "Source": "Finviz", "Value": data_map[f_key]})
                 if f_key == "Insider Trans":
-                    results.append({"Metric Name": "Net Insider Activity", "Source": "Finviz",
-                                    "Value": get_insider_sentiment(data_map[f_key])})
+                    results.append({"Metric Name": "Net Insider Activity", "Source": "Finviz", "Value": get_insider_sentiment(data_map[f_key])})
     except:
         pass
     return results
 
-
 def fetch_yfinance_comprehensive(ticker):
     """
-    Fetches core metrics from Yahoo Finance info and financial statements sequentially.
-    Optimized for Streamlit Cloud to reduce 'Too Many Requests' errors.
+    Fetches core metrics from Yahoo Finance info and financial statements.
+    Includes aggressive fallback logic to avoid N/A on cloud platforms.
     """
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
-
-        # Using .info often triggers rate limits on Streamlit Cloud/GitHub.
-        # We try to get basic price data from .fast_info as a fallback if .info fails.
+        
+        # Try to get info dictionary
         try:
             info = stock.info
         except Exception:
             info = {}
 
-        # Basic Market Metrics - Hybrid approach for reliability
+        # Aggressive Fallback for Price and Market Cap
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-        if current_price is None:
+        if current_price is None or current_price == 'N/A':
             try:
-                current_price = stock.fast_info.get('last_price')
+                # Use fast_info as first fallback
+                current_price = stock.fast_info.get('lastPrice') or stock.fast_info.get('last_price')
             except:
                 current_price = 'N/A'
 
         market_cap = info.get('marketCap')
-        if market_cap is None:
+        if market_cap is None or market_cap == 'N/A':
             try:
-                market_cap = stock.fast_info.get('market_cap')
+                market_cap = stock.fast_info.get('marketCap') or stock.fast_info.get('market_cap')
             except:
                 market_cap = 'N/A'
+
+        shares_outstanding = info.get('sharesOutstanding')
+        if shares_outstanding is None or shares_outstanding == 'N/A':
+            try:
+                shares_outstanding = stock.fast_info.get('shares_outstanding')
+            except:
+                shares_outstanding = 'N/A'
+
+        high_52 = info.get('fiftyTwoWeekHigh')
+        if high_52 is None or high_52 == 'N/A':
+            try:
+                high_52 = stock.fast_info.get('yearHigh') or stock.fast_info.get('year_high')
+            except:
+                high_52 = 'N/A'
+
+        low_52 = info.get('fiftyTwoWeekLow')
+        if low_52 is None or low_52 == 'N/A':
+            try:
+                low_52 = stock.fast_info.get('yearLow') or stock.fast_info.get('year_low')
+            except:
+                low_52 = 'N/A'
 
         basic_metrics = [
             ("Company Name", info.get('longName', ticker), False),
             ("Current Stock Price", current_price, True),
             ("Market Cap", market_cap, True),
-            ("Shares Outstanding", info.get('sharesOutstanding', 'N/A'), False),
-            ("52 Week High", info.get('fiftyTwoWeekHigh', 'N/A'), True),
-            ("52 Week Low", info.get('fiftyTwoWeekLow', 'N/A'), True)
+            ("Shares Outstanding", shares_outstanding, False),
+            ("52 Week High", high_52, True),
+            ("52 Week Low", low_52, True)
         ]
-
+        
         for name, val, is_curr in basic_metrics:
-            all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
-                             "Value": format_large_number(val, is_currency=is_curr)})
+            all_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val, is_currency=is_curr)})
 
         total_insider = info.get('heldPercentInsiders')
         ins_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
@@ -165,8 +177,7 @@ def fetch_yfinance_comprehensive(ticker):
 
         try:
             opts = stock.options
-            all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance",
-                             "Value": opts[-1] if opts else "N/A"})
+            all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": opts[-1] if opts else "N/A"})
         except:
             all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": "N/A"})
 
@@ -180,49 +191,46 @@ def fetch_yfinance_comprehensive(ticker):
             total_assets = bs.get('Total Assets', 0)
             total_liabilities = bs.get('Total Liabilities Net Minority Interest', bs.get('Total Liabilities', 0))
             cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
-
-            all_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(total_assets), True)})
-            all_rows.append({"Metric Name": "Total Liabilities", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(total_liabilities), True)})
+            
+            all_rows.append({"Metric Name": "Total Assets", "Source": "Yahoo Finance", "Value": format_large_number(float(total_assets), True)})
+            all_rows.append({"Metric Name": "Total Liabilities", "Source": "Yahoo Finance", "Value": format_large_number(float(total_liabilities), True)})
 
             if total_liabilities and float(total_liabilities) != 0:
                 al_ratio = round(float(total_assets) / float(total_liabilities), 2)
                 all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": al_ratio})
+            else:
+                all_rows.append({"Metric Name": "Assets / Liabilities Ratio", "Source": "Derived", "Value": "N/A"})
 
-            all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(cash), True)})
+            all_rows.append({"Metric Name": "Cash & Cash Equivalents (Latest Quarter)", "Source": "Yahoo Finance", "Value": format_large_number(float(cash), True)})
 
         if not q_is.empty:
             is_data = q_is.iloc[:, 0]
             op_exp = is_data.get('Operating Expense', is_data.get('Total Operating Expenses', 0))
-            all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance",
-                             "Value": format_large_number(float(op_exp), True)})
+            all_rows.append({"Metric Name": "Operating Expenses (Quarterly)", "Source": "Yahoo Finance", "Value": format_large_number(float(op_exp), True)})
 
         if not q_cf.empty:
             op_cash = 0
-            for key in ['Total Cash From Operating Activities', 'Operating Cash Flow',
-                        'Cash Flow From Continuing Operating Activities']:
+            for key in ['Total Cash From Operating Activities', 'Operating Cash Flow', 'Cash Flow From Continuing Operating Activities']:
                 if key in q_cf.index:
                     op_cash = q_cf.loc[key].iloc[0]
                     break
-
+            
             if op_cash < 0 and not q_bs.empty:
-                cash = q_bs.iloc[:, 0].get('Cash And Cash Equivalents', 0)
+                current_cash = bs.get('Cash And Cash Equivalents', bs.get('Cash Cash Equivalents And Short Term Investments', 0))
                 monthly_burn = abs(float(op_cash)) / 3
-                runway = round(float(cash) / monthly_burn, 1) if monthly_burn > 0 else 0
+                runway = round(float(current_cash) / monthly_burn, 1) if monthly_burn > 0 else 0
                 all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": f"{runway} months"})
-            else:
+            elif op_cash > 0:
                 all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "Cash flow positive"})
+            else:
+                all_rows.append({"Metric Name": "Runway", "Source": "Derived", "Value": "N/A"})
 
     except Exception as e:
         if "Too Many Requests" in str(e) or "429" in str(e):
-            st.warning(
-                "Yahoo Finance rate limit hit. This often happens on shared cloud hosting (Streamlit/GitHub). Try again in a few minutes or run locally.")
+            st.warning("Yahoo Finance rate limit hit. This often happens on shared cloud hosting (Streamlit/GitHub). Results may be incomplete.")
         else:
             st.error(f"Error fetching Yahoo Finance data: {e}")
     return all_rows
-
 
 def main():
     if 'report_data' not in st.session_state: st.session_state.report_data = None
@@ -231,21 +239,19 @@ def main():
         st.markdown(
             '<div class="main-header"><h1>Stock Insight Pro</h1><p>Institutional-Grade Stock Analysis</p></div>',
             unsafe_allow_html=True)
-
+        
         _, center_col, _ = st.columns([1, 1.5, 1])
         with center_col:
-            ticker_input = st.text_input("Ticker", placeholder="e.g. TSLA, NVDA", key="ticker_box",
-                                         label_visibility="collapsed")
+            ticker_input = st.text_input("Ticker", placeholder="e.g. TSLA, NVDA", key="ticker_box", label_visibility="collapsed")
             if st.button("Generate Comprehensive Report") and ticker_input:
                 ticker = format_ticker(ticker_input)
                 status_text = st.empty()
                 status_text.info(f"Gathering data for {ticker}...")
-
+                
                 try:
-                    # Sequential data gathering (no threading)
                     yf_data = fetch_yfinance_comprehensive(ticker)
                     fv_data = scrape_finviz_comprehensive(ticker)
-
+                    
                     st.session_state.report_data = yf_data + fv_data
                     st.session_state.current_ticker = ticker
                     status_text.empty()
@@ -266,7 +272,6 @@ def main():
             st.dataframe(df, width='stretch', hide_index=True)
         else:
             st.info("No metric data found.")
-
 
 if __name__ == "__main__":
     main()
