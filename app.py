@@ -4,11 +4,6 @@ import pandas as pd
 import requests
 import numpy as np
 from bs4 import BeautifulSoup
-import time
-import concurrent.futures
-from datetime import datetime
-import os
-import threading
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -77,8 +72,8 @@ def get_insider_sentiment(val_str):
 
 def scrape_finviz_comprehensive(ticker):
     """
-    Scrapes the Finviz snapshot table for metrics previously required:
-    Insider Trans, Inst Own, Short Float, AND Insider Own.
+    Scrapes the Finviz snapshot table for metrics previously required.
+    Sequential execution only.
     """
     url = f"https://finviz.com/quote.ashx?t={ticker}"
     headers = {
@@ -101,12 +96,11 @@ def scrape_finviz_comprehensive(ticker):
                 if key:
                     data_map[key] = val
 
-        # Adding previously tracked Finviz metrics
         metrics_to_pick = {
             "Insider Trans": "Net Insider Buying vs Selling %",
             "Inst Own": "Institutional Ownership %",
             "Short Float": "Short Float %",
-            "Insider Own": "Insider Ownership %"  # Specifically requested additional metric
+            "Insider Own": "Insider Ownership %"
         }
 
         for f_key, display_name in metrics_to_pick.items():
@@ -115,22 +109,20 @@ def scrape_finviz_comprehensive(ticker):
                 if f_key == "Insider Trans":
                     results.append({"Metric Name": "Net Insider Activity", "Source": "Finviz",
                                     "Value": get_insider_sentiment(data_map[f_key])})
-
-    except Exception as e:
+    except:
         pass
     return results
 
 
 def fetch_yfinance_comprehensive(ticker):
     """
-    Fetches all core metrics from Yahoo Finance info and financial statements.
+    Fetches core metrics from Yahoo Finance info and financial statements sequentially.
     """
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
 
-        # Previously tracked Basic Market Metrics
         basic_metrics = [
             ("Company Name", info.get('longName', ticker), False),
             ("Current Stock Price", info.get('currentPrice', info.get('regularMarketPrice', 'N/A')), True),
@@ -144,12 +136,10 @@ def fetch_yfinance_comprehensive(ticker):
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance",
                              "Value": format_large_number(val, is_currency=is_curr)})
 
-        # Total Insider % from YF
         total_insider = info.get('heldPercentInsiders')
         ins_val = f"{total_insider * 100:.2f}%" if total_insider is not None else "N/A"
         all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
 
-        # Options Expiration
         try:
             opts = stock.options
             all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance",
@@ -157,7 +147,7 @@ def fetch_yfinance_comprehensive(ticker):
         except:
             all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": "N/A"})
 
-        # Balance Sheet & Cash Flow
+        # Financial Statements
         q_bs = stock.quarterly_balance_sheet
         q_cf = stock.quarterly_cashflow
         q_is = stock.quarterly_financials
@@ -222,15 +212,12 @@ def main():
             if st.button("Generate Comprehensive Report") and ticker_input:
                 ticker = format_ticker(ticker_input)
                 status_text = st.empty()
-                status_text.info(f"Gathering data for {ticker} from Yahoo Finance and Finviz...")
+                status_text.info(f"Gathering data for {ticker}...")
 
                 try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                        future_yf = executor.submit(fetch_yfinance_comprehensive, ticker)
-                        future_fv = executor.submit(scrape_finviz_comprehensive, ticker)
-
-                        yf_data = future_yf.result()
-                        fv_data = future_fv.result()
+                    # Sequential data gathering (no threading)
+                    yf_data = fetch_yfinance_comprehensive(ticker)
+                    fv_data = scrape_finviz_comprehensive(ticker)
 
                     st.session_state.report_data = yf_data + fv_data
                     st.session_state.current_ticker = ticker
@@ -249,7 +236,7 @@ def main():
         if st.session_state.report_data:
             df = pd.DataFrame(st.session_state.report_data)
             df['Value'] = df['Value'].astype(str)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width='stretch', hide_index=True)
         else:
             st.info("No metric data found.")
 
