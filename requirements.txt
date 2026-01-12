@@ -3,7 +3,4 @@ yfinance
 pandas
 requests
 beautifulsoup4
-undetected-chromedriver
-selenium==4.21.0
-webdriver-manager
-setuptools
+
