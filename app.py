@@ -6,6 +6,7 @@ import numpy as np
 from bs4 import BeautifulSoup
 import warnings
 import time
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
@@ -67,6 +68,30 @@ def get_insider_sentiment(val_str):
     except:
         return "N/A"
 
+def scrape_yahoo_insider_percent(ticker):
+    """
+    Direct HTML Scraper for Yahoo Finance Holders page.
+    This bypasses the yfinance 'info' API rate limits.
+    """
+    url = f"https://finance.yahoo.com/quote/{ticker}/holders"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            # Yahoo usually displays this in a table under 'Major Holders'
+            # Look for '% of Shares Held by All Insider'
+            rows = soup.find_all("tr")
+            for row in rows:
+                if "Insider" in row.text and "%" in row.text:
+                    tds = row.find_all("td")
+                    if len(tds) >= 1:
+                        val = tds[0].text.strip()
+                        if "%" in val: return val
+    except:
+        pass
+    return "N/A"
+
 def scrape_finviz_comprehensive(ticker):
     """
     Scrapes the Finviz snapshot table for metrics previously required.
@@ -110,79 +135,69 @@ def scrape_finviz_comprehensive(ticker):
 def fetch_yfinance_comprehensive(ticker):
     """
     Fetches core metrics with specific focus on fixing Shares Outstanding, 
-    Insider Ownership, and Options Expiration.
+    Insider Ownership, and Options Expiration via aggressive fallbacks.
     """
     all_rows = []
     try:
         stock = yf.Ticker(ticker)
         
-        # Aggressive attempts to get 'info'
+        # 1. ATTEMPT INFO (Can be None in Cloud)
         info = {}
         try:
             info = stock.info
-            if not info or len(info) < 5:
-                # If info is tiny, it's likely a partial rate limit
-                raise ValueError("Incomplete info")
+            if not info: info = {}
         except:
             info = {}
 
-        # 1. SHARES OUTSTANDING - Multi-layer fallback
-        shares = info.get('sharesOutstanding')
-        if not shares or shares == 'N/A':
-            try:
-                # Fast info uses different keys sometimes
-                shares = stock.fast_info.get('shares_outstanding') or stock.fast_info.get('sharesOutstanding')
-            except:
-                shares = None
-        
-        if not shares:
-            try:
-                # Check metadata as final fallback
-                shares = stock.get_shares_full(start=datetime.now().strftime('%Y-%m-01'))[-1]
-            except:
-                shares = 'N/A'
-
-        # 2. INSIDER OWNERSHIP % - Check multiple info keys
-        # Possible keys: heldPercentInsiders, heldPercentInsiders (capitalization varies)
-        total_insider = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
-        if total_insider is None:
-            # Sometimes nested in holders data, but let's try to find it in any info key containing 'insider'
-            for k, v in info.items():
-                if 'insider' in k.lower() and ('percent' in k.lower() or 'held' in k.lower()):
-                    total_insider = v
-                    break
-        
-        ins_val = f"{total_insider * 100:.2f}%" if (isinstance(total_insider, (int, float)) and total_insider is not None) else "N/A"
-
-        # 3. OPTIONS EXPIRATION - Robust retrieval
-        latest_opt = "N/A"
-        try:
-            expirations = stock.options
-            if expirations:
-                latest_opt = expirations[-1]
-        except Exception:
-            # If standard call fails, options might be unavailable for this ticker or rate limited
-            latest_opt = "N/A"
-
-        # Basic Market Metrics
+        # 2. PRICE & MARKET CAP (Layered Fallback)
         current_price = info.get('currentPrice') or info.get('regularMarketPrice')
         if not current_price:
             try: current_price = stock.fast_info.get('last_price') or stock.fast_info.get('lastPrice')
-            except: current_price = 'N/A'
+            except: current_price = None
 
-        market_cap = info.get('marketCap')
-        if not market_cap:
-            try: market_cap = stock.fast_info.get('market_cap') or stock.fast_info.get('marketCap')
-            except: market_cap = 'N/A'
+        m_cap = info.get('marketCap')
+        if not m_cap:
+            try: m_cap = stock.fast_info.get('market_cap') or stock.fast_info.get('marketCap')
+            except: m_cap = None
 
+        # 3. SHARES OUTSTANDING (Calculated Fallback - Most Robust)
+        shares = info.get('sharesOutstanding')
+        if not shares:
+            try: shares = stock.fast_info.get('shares_outstanding') or stock.fast_info.get('sharesOutstanding')
+            except: shares = None
+        
+        # If still None, calculate from MCap and Price
+        if not shares and m_cap and current_price:
+            try: shares = float(m_cap) / float(current_price)
+            except: shares = "N/A"
+
+        # 4. INSIDER OWNERSHIP % (Direct Scraper Fallback)
+        ins_val = "N/A"
+        raw_ins = info.get('heldPercentInsiders') or info.get('held_percent_insiders')
+        if raw_ins:
+            ins_val = f"{raw_ins * 100:.2f}%"
+        else:
+            # Info failed, try direct HTML scraping
+            ins_val = scrape_yahoo_insider_percent(ticker)
+
+        # 5. OPTIONS EXPIRATION (Robust Check)
+        latest_opt = "N/A"
+        try:
+            expirations = stock.options
+            if expirations and len(expirations) > 0:
+                latest_opt = str(expirations[-1])
+        except:
+            latest_opt = "N/A"
+
+        # Build basic metrics table
         high_52 = info.get('fiftyTwoWeekHigh') or stock.fast_info.get('yearHigh') or 'N/A'
         low_52 = info.get('fiftyTwoWeekLow') or stock.fast_info.get('yearLow') or 'N/A'
 
         basic_metrics = [
             ("Company Name", info.get('longName', ticker), False),
-            ("Current Stock Price", current_price, True),
-            ("Market Cap", market_cap, True),
-            ("Shares Outstanding", shares, False),
+            ("Current Stock Price", current_price if current_price else "N/A", True),
+            ("Market Cap", m_cap if m_cap else "N/A", True),
+            ("Shares Outstanding", shares if shares else "N/A", False),
             ("52 Week High", high_52, True),
             ("52 Week Low", low_52, True)
         ]
@@ -190,7 +205,7 @@ def fetch_yfinance_comprehensive(ticker):
         for name, val, is_curr in basic_metrics:
             all_rows.append({"Metric Name": name, "Source": "Yahoo Finance", "Value": format_large_number(val, is_currency=is_curr)})
 
-        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance", "Value": ins_val})
+        all_rows.append({"Metric Name": "Total Insider Ownership %", "Source": "Yahoo Finance (Scraped Fallback)", "Value": ins_val})
         all_rows.append({"Metric Name": "Latest Options Expiration", "Source": "Yahoo Finance", "Value": latest_opt})
 
         # Financial Statements
@@ -235,7 +250,7 @@ def fetch_yfinance_comprehensive(ticker):
 
     except Exception as e:
         if "Too Many Requests" in str(e) or "429" in str(e):
-            st.warning("Yahoo Finance rate limit active. Showing partial data from fallback sources.")
+            st.warning("Yahoo Finance Rate Limit: Some market data fetched via backup scraping methods.")
         else:
             st.error(f"Error fetching Yahoo Finance data: {e}")
     return all_rows
