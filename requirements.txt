@@ -6,4 +6,6 @@ selenium
 webdriver-manager
 playwright
 yfinance
+
 undetected-chromedriver
+setuptools
