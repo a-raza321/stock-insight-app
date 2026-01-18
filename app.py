@@ -3,7 +3,11 @@ import pandas as pd
 import sys
 import asyncio
 import re
-
+#temporary code lines 
+#----------------------
+import debug_resources 
+st.stop()
+#----------------------
 # --- WINDOWS ASYNCIO FIX ---
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -701,3 +705,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
