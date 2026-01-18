@@ -1,7 +1,0 @@
-streamlit
-yfinance
-pandas
-requests
-numpy
-beautifulsoup4
-lxml
