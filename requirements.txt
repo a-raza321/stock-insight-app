@@ -9,4 +9,5 @@ yfinance
 
 undetected-chromedriver
 setuptools
-psutil
+
+
