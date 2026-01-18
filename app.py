@@ -317,16 +317,14 @@ def calculate_scoring(metric_name, value):
     # Net Insider Buying vs Selling
     elif "buying vs selling" in name_low:
         total = 4
-        v = str(value).lower()
-        if "buying" in v:
-            if val_num > 1:
-                obtained = 4
-            else:
-                obtained = 2
-        elif "neutral" in v:
+        if val_num > 1:
+            obtained = 4
+        elif 0 < val_num < 1:
+            obtained = 2
+        elif val_num == 0:
             obtained = 1
-        elif "selling" in v:
-            obtained = 0
+        elif val_num < 0:
+            obtained = 00
 
     # Moat Score
     elif "moat score" in name_low:
@@ -701,4 +699,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
