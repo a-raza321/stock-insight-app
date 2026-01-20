@@ -151,20 +151,45 @@ def calculate_scoring(metric_name, value):
             is_rejected = True
 
     # Net Debt / EBITDA
+    # elif "net debt" in name_low and "ebitda" in name_low:
+    #     total = 7
+    #     if "negative ebitda" in val_str_low:
+    #         is_rejected = True
+    #     elif val_num < 0:
+    #         obtained = 7
+    #     elif val_num == 0:
+    #         obtained = 7
+    #     elif 0 < val_num <= 1.5:
+    #         obtained = 5
+    #     elif 1.5 < val_num <= 3:
+    #         obtained = 3
+    #     else:
+    #         is_rejected = True
+
     elif "net debt" in name_low and "ebitda" in name_low:
         total = 7
-        if "negative ebitda" in val_str_low:
+        
+        # Rule 1 & 3: First check if Net Debt is negative. 
+        # If Net Debt is negative (regardless of EBITDA's sign), obtain 7.
+        if "negative net debt" in val_str_low or val_num < 0:
+            obtained = 7
+            
+        # Rule 2: If Net Debt is positive (implied by not meeting above condition) 
+        # and EBITDA is negative, mark as rejected.
+        elif "negative ebitda" in val_str_low:
             is_rejected = True
-        elif val_num < 0:
-            obtained = 7
-        elif val_num == 0:
-            obtained = 7
-        elif 0 < val_num <= 1.5:
-            obtained = 5
-        elif 1.5 < val_num <= 3:
-            obtained = 3
+            
+        # Rule 4: If both are positive, assign score according to the ratio
         else:
-            is_rejected = True
+            if val_num == 0:
+                obtained = 7
+            elif 0 < val_num <= 1.5:
+                obtained = 5
+            elif 1.5 < val_num <= 3:
+                obtained = 3
+            else:
+                # Ratio is too high (positive)
+                is_rejected = True
 
     # Assets / Liabilities
     elif "assets" in name_low and "liabilities" in name_low:
@@ -702,5 +727,6 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
