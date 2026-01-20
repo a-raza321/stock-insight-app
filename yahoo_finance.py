@@ -314,7 +314,8 @@ def run_comprehensive_analysis(ticker_symbol):
                 net_debt_raw = total_debt - cash_comp
 
         nd_ebitda_val = "N/A"
-        if ebitda and net_debt_raw is not None and ebitda > 0:
+        # if ebitda and net_debt_raw is not None and ebitda > 0:
+        if ebitda is not None and ebitda != 0 and net_debt_raw is not None:
             nd_ebitda_val = round(net_debt_raw / ebitda, 2)
 
         # 10. Cash Burn Severity
@@ -397,4 +398,5 @@ def run_comprehensive_analysis(ticker_symbol):
     except Exception as e:
         results["status"] = "error"
         results["error"] = str(e)
+
         return results
