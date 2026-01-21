@@ -3,9 +3,8 @@ import pandas as pd
 import sys
 import asyncio
 import re
-#temporary code lines 
-#----------------------
 
+# --- WINDOWS ASYNCIO FIX ---
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
@@ -125,76 +124,84 @@ def calculate_scoring(metric_name, value):
     name_low = str(metric_name).lower()
     val_str_low = str(value).lower()
 
-    # Runway (UPDATED LOGIC)
     if "runway" in name_low:
         total = 10
-        # Check if the text implies positive cash flow or no burn
-        is_positive_cash = any(
-            phrase in val_str_low for phrase in ["positive", "no cash burn", "no burn", "profitable"])
 
-        if is_positive_cash:
-            obtained = 10
-        elif val_num >= 24:
-            obtained = 10
-        elif 12 <= val_num < 24:
-            obtained = 7
-        elif 6 <= val_num < 12:
+        # Check if the value is N/A, None, or Error
+        if val_str_low in ["n/a", "none", "error"]:
             obtained = 3
-        elif val_num > 0:
-            # If numeric and positive, but under 6, check if it's explicitly "months"
-            if "month" in val_str_low:
-                is_rejected = True
-            else:
-                # If it's a positive numeric value not identified as short runway months, treat as positive cash
+        else:
+
+            is_positive_cash = any(
+                phrase in val_str_low for phrase in ["positive", "no cash burn", "no burn", "profitable"])
+
+            if is_positive_cash:
                 obtained = 10
+            elif val_num >= 24:
+                obtained = 10
+            elif 12 <= val_num < 24:
+                obtained = 7
+            elif 6 <= val_num < 12:
+                obtained = 3
+            elif val_num > 0:
+
+                if "month" in val_str_low:
+                    is_rejected = True
+                else:
+
+                    obtained = 10
+            else:
+                is_rejected = True
+
+        # Net Debt / EBITDA (FIXED LOGIC)
+    elif "net debt / ebitda" in name_low:
+        total = 7
+        net_debt_val = clean_val(st.session_state.get("net_debt_val"))
+        ebitda_val = clean_val(st.session_state.get("ebitda_val"))
+        ratio_val = val_num
+
+        if net_debt_val < 0:
+            obtained = 7
+        elif ebitda_val <= 0:
+            is_rejected = True
+        elif ratio_val == 0:
+            obtained = 7
+        elif 0 < ratio_val <= 1.5:
+            obtained = 5
+        elif 1.5 < ratio_val <= 3:
+            obtained = 3
         else:
             is_rejected = True
 
     # Net Debt / EBITDA
-    # elif "net debt" in name_low and "ebitda" in name_low:
-    #     total = 7
-    #     if "negative ebitda" in val_str_low:
-    #         is_rejected = True
-    #     elif val_num < 0:
-    #         obtained = 7
-    #     elif val_num == 0:
-    #         obtained = 7
-    #     elif 0 < val_num <= 1.5:
-    #         obtained = 5
-    #     elif 1.5 < val_num <= 3:
-    #         obtained = 3
-    #     else:
-    #         is_rejected = True
-
-    elif "net debt" in name_low and "ebitda" in name_low:
+    elif "net debt / ebitda" in name_low:
         total = 7
-        
-        # Rule 1 & 3: First check if Net Debt is negative. 
-        # If Net Debt is negative (regardless of EBITDA's sign), obtain 7.
-        if "negative net debt" in val_str_low or val_num < 0:
-            obtained = 7
-            
-        # Rule 2: If Net Debt is positive (implied by not meeting above condition) 
-        # and EBITDA is negative, mark as rejected.
-        elif "negative ebitda" in val_str_low:
-            is_rejected = True
-            
-        # Rule 4: If both are positive, assign score according to the ratio
-        else:
-            if val_num == 0:
-                obtained = 7
-            elif 0 < val_num <= 1.5:
-                obtained = 5
-            elif 1.5 < val_num <= 3:
-                obtained = 3
-            else:
-                # Ratio is too high (positive)
-                is_rejected = True
 
-    # Assets / Liabilities
+        net_debt_val = clean_val(st.session_state.get("net_debt_val"))
+        ebitda_val = clean_val(st.session_state.get("ebitda_val"))
+        ratio_val = val_num  # this metric’s own value
+
+        if net_debt_val < 0:
+            obtained = 7
+
+        elif ebitda_val <= 0:
+            is_rejected = True
+
+        elif ratio_val == 0:
+            obtained = 7
+        elif 0 < ratio_val <= 1.5:
+            obtained = 5
+        elif 1.5 < ratio_val <= 3:
+            obtained = 3
+        else:
+            is_rejected = True
+
+        # Assets / Liabilities
     elif "assets" in name_low and "liabilities" in name_low:
         total = 5
-        if val_num >= 2.0:
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num >= 2.0:
             obtained = 5
         elif 1.5 <= val_num < 2.0:
             obtained = 3
@@ -206,7 +213,10 @@ def calculate_scoring(metric_name, value):
     # Cash Burn Severity
     elif "burn" in name_low:
         total = 3
-        if val_num <= 0:
+
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num <= 0:
             obtained = 3
         elif val_num < 10:
             obtained = 2
@@ -215,10 +225,12 @@ def calculate_scoring(metric_name, value):
         else:
             is_rejected = True
 
-    # Share Count Growth
+    #share count growth
     elif "share count" in name_low:
         total = 3
-        if val_num <= 0:
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num <= 0:
             obtained = 3
         elif val_num < 5:
             obtained = 2
@@ -227,16 +239,21 @@ def calculate_scoring(metric_name, value):
         else:
             is_rejected = True
 
-    # Capital Structure
+    # Capital Structure pressure
     elif "capital structure" in name_low:
         total = 2
         v = str(value).lower()
-        if "no convert" in v or "none" in v or "0" in v:
+
+        if v in ["n/a", "none", "error"]:
+            obtained = 1
+        elif "no convert" in v or "0" in v:
             obtained = 2
         elif "minor" in v:
             obtained = 1
         elif "heavy" in v or "atm" in v:
             is_rejected = True
+        else:
+            obtained = 0
 
     # Market Cap
     elif "market cap" in name_low:
@@ -261,7 +278,10 @@ def calculate_scoring(metric_name, value):
     # Forward EPS Growth
     elif "eps growth" in name_low:
         total = 7
-        if val_num >= 30:
+
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num >= 30:
             obtained = 7
         elif 20 <= val_num < 30:
             obtained = 5
@@ -295,7 +315,9 @@ def calculate_scoring(metric_name, value):
     # Short Float
     elif "short float" in name_low:
         total = 4
-        if 10 <= val_num <= 30:
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif 10 <= val_num <= 30:
             obtained = 4
         elif 5 <= val_num < 10:
             obtained = 2
@@ -307,7 +329,9 @@ def calculate_scoring(metric_name, value):
     # Institutional Ownership
     elif "institutional ownership" in name_low:
         total = 3
-        if val_num < 40:
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num < 40:
             obtained = 3
         elif 40 <= val_num <= 60:
             obtained = 2
@@ -317,7 +341,9 @@ def calculate_scoring(metric_name, value):
     # Total Insider Ownership
     elif "total insider ownership" in name_low:
         total = 6
-        if 5 <= val_num <= 20:
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 2
+        elif 5 <= val_num <= 20:
             obtained = 6
         elif 2 <= val_num < 5:
             obtained = 4
@@ -328,10 +354,13 @@ def calculate_scoring(metric_name, value):
         elif val_num > 30:
             obtained = 3
 
+
     # CEO Ownership
     elif "ceo ownership" in name_low:
         total = 3
-        if val_num >= 5:
+        if "not disclosed" in val_str_low or val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num >= 5:
             obtained = 3
         elif 2 <= val_num < 5:
             obtained = 2
@@ -340,17 +369,19 @@ def calculate_scoring(metric_name, value):
         else:
             obtained = 0
 
-    # Net Insider Buying vs Selling
+
     elif "buying vs selling" in name_low:
         total = 4
-        if val_num > 1:
+        if val_str_low in ["n/a", "none", "error"]:
+            obtained = 1
+        elif val_num > 1:
             obtained = 4
         elif 0 < val_num < 1:
             obtained = 2
         elif val_num == 0:
             obtained = 1
         elif val_num < 0:
-            obtained = 00
+            obtained = 0
 
     # Moat Score
     elif "moat score" in name_low:
@@ -454,11 +485,23 @@ def main():
                     # 1. Yahoo Finance Data
                     source_yf = "Yahoo Finance"
                     data_yf = analysis_results["data"]
+
                     for section_name, metrics in data_yf.items():
                         for metric_name, value in metrics.items():
+
+                            # ---- CAPTURE ND + EBITDA FOR 3-METRIC LOGIC ----
+                            name_low = metric_name.lower()
+                            if name_low == "net debt":
+                                st.session_state["net_debt_val"] = value
+                            elif name_low == "ebitda":
+                                st.session_state["ebitda_val"] = value
+                            # ------------------------------------------------
+
                             points, total_pts, rejected = calculate_scoring(metric_name, value)
+
                             pts_str = "rejected" if rejected else (str(points) if total_pts > 0 else "")
                             total_pts_str = str(total_pts) if total_pts > 0 else ""
+
                             table_rows.append({
                                 "Metric Name": metric_name,
                                 "Source": source_yf,
@@ -725,8 +768,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
-
-
-
