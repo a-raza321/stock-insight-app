@@ -4,6 +4,32 @@ import time
 import os
 import streamlit as st
 
+
+def get_company_name(ticker):
+    """
+    Fetches the official company name from Polygon.io using the ticker.
+    """
+    # Replace with your actual Polygon.io API key
+    # polygon_api_key = ""
+    polygon_api_key = st.secrets["polygon"]
+    url = f"https://api.polygon.io/v3/reference/tickers/{ticker}?apiKey={polygon_api_key}"
+
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            # Extract the company name from the results
+            name = data.get("results", {}).get("name")
+            if name:
+                return name
+            return ticker
+        else:
+            # Fallback to ticker if API call fails
+            return ticker
+    except Exception:
+        return ticker
+
+
 def analyze_ticker(ticker):
     """
     Python script to perform fundamental equity analysis using the Perplexity API.
@@ -11,14 +37,16 @@ def analyze_ticker(ticker):
 
     # 1. Configuration
     # Hardcoded API key as requested
-    api_key = st.secrets["api_key"]  # API Key Placeholder
+    # api_key = ""
+    api_key = st.secrets["perplexity"]
 
-    # Ticker is used as the company name reference as requested
-    company_name = ticker
+    # 2. Get the name of company using ticker through api of polygon.io
+    company_name = get_company_name(ticker)
 
-    # 2. Construct the Prompts
+    # 3. Construct the Prompts
     system_prompt = "You are a fundamental equity analyst."
 
+    # Passing the company_name fetched from Polygon.io directly into the prompt
     user_prompt = f"""Analyze the following company: {company_name} (Ticker: {ticker})
 
 Tasks:
@@ -67,7 +95,7 @@ Rules:
 - Base conclusions on business fundamentals, customer dependency, and competitive dynamics.
 """
 
-    # 3. API Request Setup
+    # 4. API Request Setup
     url = "https://api.perplexity.ai/chat/completions"
 
     payload = {
@@ -90,7 +118,7 @@ Rules:
         "Content-Type": "application/json"
     }
 
-    # 4. Execute with Exponential Backoff
+    # 5. Execute with Exponential Backoff
     max_retries = 5
     for attempt in range(max_retries):
         try:
@@ -117,3 +145,4 @@ Rules:
 if __name__ == "__main__":
     # Example usage if run directly
     result = analyze_ticker("AAPL")
+    print(result)
