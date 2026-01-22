@@ -143,34 +143,40 @@ def run_comprehensive_analysis(ticker_symbol):
             severity_val = "0.00% (Positive FCF)"
 
 
-            share_growth_val = "N/A"
-            shares_data = ticker.get_shares_full(start=datetime.now() - pd.DateOffset(years=5))
-
-            if shares_data is not None and not shares_data.empty:
-                # Clean data: sort and remove duplicates
-                shares_data = shares_data.sort_index().iloc[~shares_data.index.duplicated(keep='last')]
-
-                # Ensure we have at least two data points to compare
-                if len(shares_data) > 1:
-                    latest_idx = -1
-                    target_date = shares_data.index[latest_idx] - pd.DateOffset(years=3)
-
-                    # Find the index of the date closest to 3 years ago
-                    idx_3y = shares_data.index.get_indexer([target_date], method='nearest')[0]
-
-                    # Ensure the found index is valid and not the same as the latest index
-                    if idx_3y != -1 and idx_3y < (len(shares_data) + latest_idx):
-                        latest_s = shares_data.iloc[latest_idx]
-                        hist_s = shares_data.iloc[idx_3y]
-
-                        # Calculate time difference in years
-                        years_diff = (shares_data.index[latest_idx] - shares_data.index[idx_3y]).days / 365.25
-
-                        # Validation: Check for positive non-zero values and valid time difference
-                        if (pd.notnull(latest_s) and pd.notnull(hist_s) and
-                                hist_s > 0 and latest_s > 0 and years_diff > 0):
-                            cagr = ((latest_s / hist_s) ** (1 / years_diff)) - 1
-                            share_growth_val = f"{cagr * 100:.2f}%"
+            share_growth_val = "N/A"  # Retained from Code 2
+try:
+    # Fetch 5 years to ensure enough data (From Code 1 logic)
+    shares_data = ticker.get_shares_full(start=datetime.now() - pd.DateOffset(years=5)) # From Code 1
+    
+    if shares_data is not None and not shares_data.empty: # From Code 2
+        # Sort and remove duplicates (From Code 1: Fixes Reindexing/TSLA errors)
+        shares_data = shares_data.sort_index() # From Code 1
+        shares_data = shares_data[~shares_data.index.duplicated(keep='last')] # From Code 1
+        
+        # Ensure we have at least two data points to compare (From Code 2)
+        if len(shares_data) > 1:
+            latest_shares = shares_data.iloc[-1] # From Code 1
+            latest_date = shares_data.index[-1] # From Code 1
+            
+            # Target 3 years ago (From Code 1 logic)
+            target_date = latest_date - pd.DateOffset(years=3) # From Code 1
+            idx_3y = shares_data.index.get_indexer([target_date], method='nearest')[0] # From Code 1
+            
+            # Validation: Ensure found index is valid (From Code 2/1 logic)
+            if idx_3y != -1:
+                historical_shares = shares_data.iloc[idx_3y] # From Code 1
+                historical_date = shares_data.index[idx_3y] # From Code 1
+                
+                # Calculate actual years between dates (From Code 1)
+                years_diff = (latest_date - historical_date).days / 365.25 # From Code 1
+                
+                # Validation: Positive non-zero values and valid time (From Code 2/1 mix)
+                if (pd.notnull(latest_shares) and pd.notnull(historical_shares) and 
+                    historical_shares > 0 and latest_shares > 0 and years_diff > 0.5):
+                    
+                    # CAGR Formula (From Code 1)
+                    cagr = ((latest_shares / historical_shares) ** (1 / years_diff)) - 1 # From Code 1
+                    share_growth_val = f"{cagr * 100:.2f}%"
 
         # 12. Degree of Operating Leverage (DOL)
         dol_val = "N/A"
@@ -230,4 +236,5 @@ def run_comprehensive_analysis(ticker_symbol):
         results["status"] = "error"
         results["error"] = str(e)
         return results
+
 
