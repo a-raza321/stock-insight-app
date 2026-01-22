@@ -1,8 +1,3 @@
-import yfinance as yf
-import pandas as pd
-from datetime import datetime
-
-
 def format_large_number(num):
     """
     Converts numbers to strings in Millions, Billions, or Trillions.
@@ -55,6 +50,7 @@ def run_comprehensive_analysis(ticker_symbol):
     share_growth_val = "N/A" 
     dol_val = "N/A"
     csp_status = "No converts / ATM"
+
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.info
@@ -130,8 +126,7 @@ def run_comprehensive_analysis(ticker_symbol):
                 net_debt_raw = total_debt - cash_comp
 
         nd_ebitda_val = "N/A"
-        # if ebitda and net_debt_raw is not None and ebitda > 0:
-        if ebitda is not None and ebitda != 0 and net_debt_raw is not None:
+        if ebitda and net_debt_raw is not None and ebitda > 0:
             nd_ebitda_val = round(net_debt_raw / ebitda, 2)
 
         # 10. Cash Burn Severity
@@ -142,40 +137,20 @@ def run_comprehensive_analysis(ticker_symbol):
         elif fcf_ttm is not None and fcf_ttm >= 0:
             severity_val = "0.00% (Positive FCF)"
 
-        share_growth_val = "N/A"  # Retained from Code 2
-                try:
-    # Fetch 5 years to ensure enough data (From Code 1 logic)
-        shares_data = ticker.get_shares_full(start=datetime.now() - pd.DateOffset(years=5)) # From Code 1
-    
-        if shares_data is not None and not shares_data.empty: # From Code 2
-        # Sort and remove duplicates (From Code 1: Fixes Reindexing/TSLA errors)
-            shares_data = shares_data.sort_index() # From Code 1
-            shares_data = shares_data[~shares_data.index.duplicated(keep='last')] # From Code 1
-        
-        # Ensure we have at least two data points to compare (From Code 2)
+        # 11. Share Count Growth (CAGR)
+        share_growth_val = "N/A"
+        shares_data = ticker.get_shares_full(start=datetime.now() - pd.DateOffset(years=5))
+        if shares_data is not None and not shares_data.empty:
+            shares_data = shares_data.sort_index().iloc[~shares_data.index.duplicated(keep='last')]
             if len(shares_data) > 1:
-                latest_shares = shares_data.iloc[-1] # From Code 1
-                latest_date = shares_data.index[-1] # From Code 1
-            
-            # Target 3 years ago (From Code 1 logic)
-                target_date = latest_date - pd.DateOffset(years=3) # From Code 1
-                idx_3y = shares_data.index.get_indexer([target_date], method='nearest')[0] # From Code 1
-            
-            # Validation: Ensure found index is valid (From Code 2/1 logic)
-                    if idx_3y != -1:
-                        historical_shares = shares_data.iloc[idx_3y] # From Code 1
-                        historical_date = shares_data.index[idx_3y] # From Code 1
-                
-                # Calculate actual years between dates (From Code 1)
-                        years_diff = (latest_date - historical_date).days / 365.25 # From Code 1
-                
-                # Validation: Positive non-zero values and valid time (From Code 2/1 mix)
-                        if (pd.notnull(latest_shares) and pd.notnull(historical_shares) and 
-                            historical_shares > 0 and latest_shares > 0 and years_diff > 0.5):
-                    
-                    # CAGR Formula (From Code 1)
-                            cagr = ((latest_shares / historical_shares) ** (1 / years_diff)) - 1 # From Code 1
-                            share_growth_val = f"{cagr * 100:.2f}%"
+                latest_s = shares_data.iloc[-1]
+                idx_3y = \
+                shares_data.index.get_indexer([shares_data.index[-1] - pd.DateOffset(years=3)], method='nearest')[0]
+                hist_s = shares_data.iloc[idx_3y]
+                years_diff = (shares_data.index[-1] - shares_data.index[idx_3y]).days / 365.25
+                if years_diff > 0:
+                    cagr = ((latest_s / hist_s) ** (1 / years_diff)) - 1
+                    share_growth_val = f"{cagr * 100:.2f}%"
 
         # 12. Degree of Operating Leverage (DOL)
         dol_val = "N/A"
@@ -235,6 +210,3 @@ def run_comprehensive_analysis(ticker_symbol):
         results["status"] = "error"
         results["error"] = str(e)
         return results
-
-
-
