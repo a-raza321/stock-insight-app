@@ -415,7 +415,7 @@ async def run_parallel_analysis(ticker):
     """Executes all data fetching functions in parallel."""
     ALPHA_VANTAGE_KEY = 'Y926KN3J6E2G19HX'
 
-    # Run all tasks concurrently using asyncio.to_thread for synchronous functions
+
     tasks = [
         asyncio.to_thread(run_comprehensive_analysis, ticker),
         asyncio.to_thread(scrape_finviz, ticker),
