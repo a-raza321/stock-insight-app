@@ -1,11 +1,10 @@
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
-import requests  # Added for proxy session management
-import time  # Added for retry delay logic
-import logging  # Added for error handling logs
+import time
+import logging
 
-# --- Change: Configured logging to track errors and retries ---
+# --- Configured logging to track errors and retries ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
@@ -36,32 +35,29 @@ def get_latest_metric(df, possible_keys):
         return None, None
     for key in possible_keys:
         if key in df.index:
-            val = df.loc[key].iloc[0]
-            if pd.notnull(val):
-                return val, key
+            try:
+                val = df.loc[key].iloc[0]
+                if pd.notnull(val):
+                    return val, key
+            except (IndexError, AttributeError):
+                continue
     return None, None
 
 
 def run_comprehensive_analysis(ticker_symbol):
-    # --- Change: Proxy Setup for Oracle Compute Instance ---
-    proxy_host = "gw.dataimpulse.com"
-    proxy_port = "823"
-    proxy_url = f"http://{proxy_host}:{proxy_port}"
+    # NOTE: In yfinance v0.2.50+, passing 'proxies' or 'session' to Ticker() causes a TypeError.
+    # The library now uses curl_cffi internally. If a proxy is strictly required by your
+    # environment (e.g. Oracle Cloud), it should be set via environment variables
+    # (HTTP_PROXY/HTTPS_PROXY) or passed to the .get_info() method if supported.
 
-    proxies = {
-        "http": proxy_url,
-        "https": proxy_url
-    }
+    proxy_url = "http://gw.dataimpulse.com:823"
 
-    # --- Change: Initialize a session with the proxy to be used by yfinance ---
-    session = requests.Session()
-    session.proxies.update(proxies)
-
-    # --- Change: Retry Logic Implementation (Up to 2 tries) ---
     max_retries = 2
     retry_count = 0
 
     results = {"ticker": ticker_symbol, "status": "success", "data": {}, "error": None}
+
+    # Initialize variables for the final report
     current_price = None
     market_cap = None
     low_52 = None
@@ -79,10 +75,14 @@ def run_comprehensive_analysis(ticker_symbol):
     share_growth_val = "N/A"
     dol_val = "N/A"
     csp_status = "No converts / ATM"
+
     while retry_count <= max_retries:
         try:
-            # --- Change: Passing the proxy session to yf.Ticker ---
-            ticker = yf.Ticker(ticker_symbol, session=session)
+            # FIX: Initialize Ticker without proxies/session to avoid TypeError
+            ticker = yf.Ticker(ticker_symbol)
+
+            # Fetching Info
+            # Note: Ticker.info is a property that triggers a fetch.
             info = ticker.info
 
             # Fetching Dataframes
@@ -90,20 +90,19 @@ def run_comprehensive_analysis(ticker_symbol):
             a_balance_sheet = ticker.balance_sheet
             q_cash_flow = ticker.quarterly_cashflow
             a_financials = ticker.financials
-            q_financials = ticker.quarterly_financials
+            # q_financials is fetched but not explicitly used in your original logic downstream
+            # q_financials = ticker.quarterly_financials
 
-            if not info or (q_balance_sheet.empty and a_financials.empty):
-                # --- Change: Log warning for empty data ---
+            if not info or (q_balance_sheet is None or q_balance_sheet.empty):
                 logging.warning(f"Insufficient data for {ticker_symbol} on attempt {retry_count + 1}")
-                results["status"] = "error"
-                results["error"] = f"Could not retrieve sufficient data for {ticker_symbol}."
-
-                # Logic for retry in case of empty data (sometimes yfinance returns empty on proxy lag)
                 retry_count += 1
                 if retry_count <= max_retries:
                     time.sleep(2)
                     continue
-                return results
+                else:
+                    results["status"] = "error"
+                    results["error"] = f"Could not retrieve sufficient data for {ticker_symbol}."
+                    return results
 
             # 1. Current stock price
             current_price = info.get('currentPrice') or info.get('regularMarketPrice')
@@ -116,8 +115,11 @@ def run_comprehensive_analysis(ticker_symbol):
             high_52 = info.get('fiftyTwoWeekHigh')
 
             # 4. Latest expiration date
-            options = ticker.options
-            latest_expiry = options[-1] if options else "N/A"
+            try:
+                options = ticker.options
+                latest_expiry = options[-1] if options else "N/A"
+            except Exception:
+                latest_expiry = "N/A"
 
             # 5. Total insider ownership %
             insider_own_pct = info.get('heldPercentInsiders')
@@ -139,7 +141,6 @@ def run_comprehensive_analysis(ticker_symbol):
                     total_liabilities = (curr_l or 0) + (non_curr_l or 0)
 
             # 7. Assets / Liabilities Ratio
-            al_ratio = None
             if total_assets and total_liabilities and total_liabilities != 0:
                 al_ratio = round(total_assets / total_liabilities, 2)
 
@@ -147,7 +148,6 @@ def run_comprehensive_analysis(ticker_symbol):
             current_cash, _ = get_latest_metric(q_balance_sheet, ['Cash And Cash Equivalents',
                                                                   'Cash Cash Equivalents And Short Term Investments'])
             quarterly_ocf, _ = get_latest_metric(q_cash_flow, ['Operating Cash Flow'])
-            runway_val = "N/A"
             if current_cash is not None and quarterly_ocf is not None:
                 if quarterly_ocf < 0:
                     monthly_burn = abs(quarterly_ocf) / 3
@@ -164,53 +164,41 @@ def run_comprehensive_analysis(ticker_symbol):
                 if total_debt is not None and cash_comp is not None:
                     net_debt_raw = total_debt - cash_comp
 
-            nd_ebitda_val = "N/A"
-            # if ebitda and net_debt_raw is not None and ebitda > 0:
             if ebitda is not None and ebitda != 0 and net_debt_raw is not None:
                 nd_ebitda_val = round(net_debt_raw / ebitda, 2)
 
             # 10. Cash Burn Severity
-            fcf_ttm = q_cash_flow.loc['Free Cash Flow'].iloc[
-                      :4].sum() if 'Free Cash Flow' in q_cash_flow.index else None
-            severity_val = "N/A"
+            fcf_ttm = None
+            if q_cash_flow is not None and 'Free Cash Flow' in q_cash_flow.index:
+                fcf_ttm = q_cash_flow.loc['Free Cash Flow'].iloc[:4].sum()
+
             if market_cap and fcf_ttm is not None and fcf_ttm < 0:
                 severity_val = f"{(abs(fcf_ttm) / market_cap) * 100:.2f}%"
             elif fcf_ttm is not None and fcf_ttm >= 0:
                 severity_val = "0.00% (Positive FCF)"
 
             # 11. Share Count Growth
-            share_growth_val = "N/A"
-            shares_data = ticker.get_shares_full(start=datetime.now() - pd.DateOffset(years=5))
-
-            if shares_data is not None and not shares_data.empty:
-                # Clean data: sort and remove duplicates
-                shares_data = shares_data.sort_index().iloc[~shares_data.index.duplicated(keep='last')]
-
-                # Ensure we have at least two data points to compare
-                if len(shares_data) > 1:
-                    latest_idx = -1
-                    target_date = shares_data.index[latest_idx] - pd.DateOffset(years=3)
-
-                    # Find the index of the date closest to 3 years ago
-                    idx_3y = shares_data.index.get_indexer([target_date], method='nearest')[0]
-
-                    # Ensure the found index is valid and not the same as the latest index
-                    if idx_3y != -1 and idx_3y < (len(shares_data) + latest_idx):
-                        latest_s = shares_data.iloc[latest_idx]
-                        hist_s = shares_data.iloc[idx_3y]
-
-                        # Calculate time difference in years
-                        years_diff = (shares_data.index[latest_idx] - shares_data.index[idx_3y]).days / 365.25
-
-                        # Validation: Check for positive non-zero values and valid time difference
-                        if (pd.notnull(latest_s) and pd.notnull(hist_s) and
-                                hist_s > 0 and latest_s > 0 and years_diff > 0):
-                            cagr = ((latest_s / hist_s) ** (1 / years_diff)) - 1
-                            share_growth_val = f"{cagr * 100:.2f}%"
+            try:
+                shares_data = ticker.get_shares_full(start=datetime.now() - pd.DateOffset(years=5))
+                if shares_data is not None and not shares_data.empty:
+                    shares_data = shares_data.sort_index().iloc[~shares_data.index.duplicated(keep='last')]
+                    if len(shares_data) > 1:
+                        latest_idx = -1
+                        target_date = shares_data.index[latest_idx] - pd.DateOffset(years=3)
+                        idx_3y = shares_data.index.get_indexer([target_date], method='nearest')[0]
+                        if idx_3y != -1 and idx_3y < (len(shares_data) + latest_idx):
+                            latest_s = shares_data.iloc[latest_idx]
+                            hist_s = shares_data.iloc[idx_3y]
+                            years_diff = (shares_data.index[latest_idx] - shares_data.index[idx_3y]).days / 365.25
+                            if (pd.notnull(latest_s) and pd.notnull(hist_s) and
+                                    hist_s > 0 and latest_s > 0 and years_diff > 0):
+                                cagr = ((latest_s / hist_s) ** (1 / years_diff)) - 1
+                                share_growth_val = f"{cagr * 100:.2f}%"
+            except Exception:
+                share_growth_val = "N/A"
 
             # 12. Degree of Operating Leverage (DOL)
-            dol_val = "N/A"
-            if a_financials.shape[1] >= 2 and 'Total Revenue' in a_financials.index:
+            if a_financials is not None and a_financials.shape[1] >= 2 and 'Total Revenue' in a_financials.index:
                 sales = a_financials.loc['Total Revenue']
                 ebit_v, ebit_k = get_latest_metric(a_financials, ['EBIT', 'Operating Income'])
                 if ebit_v is not None:
@@ -223,13 +211,15 @@ def run_comprehensive_analysis(ticker_symbol):
 
             # 13. Capital Structure Pressure (CSP)
             debt_to_equity = info.get('debtToEquity', 0)
-            convert_labels = [idx for idx in a_balance_sheet.index if 'convertible' in str(idx).lower()]
+            convert_labels = []
+            if a_balance_sheet is not None:
+                convert_labels = [idx for idx in a_balance_sheet.index if 'convertible' in str(idx).lower()]
+
             has_converts = len(convert_labels) > 0
             convert_val = a_balance_sheet.loc[convert_labels[0]].iloc[0] if has_converts else 0
 
-            csp_status = "No converts / ATM"
             if (debt_to_equity and debt_to_equity > 300):
-                csp_status = "Heavy converts / ATM"  # Extreme case
+                csp_status = "Heavy converts / ATM"
             elif has_converts:
                 dilution_overhang = (convert_val / market_cap) if market_cap and market_cap > 0 else 0
                 if dilution_overhang > 0.05 or (debt_to_equity and debt_to_equity > 150):
@@ -264,13 +254,12 @@ def run_comprehensive_analysis(ticker_symbol):
             return results
 
         except Exception as e:
-            # --- Change: Error logging and Retry logic handler ---
             retry_count += 1
             logging.error(f"Error on attempt {retry_count} for {ticker_symbol}: {str(e)}")
 
             if retry_count <= max_retries:
                 logging.info(f"Retrying {ticker_symbol} in 2 seconds...")
-                time.sleep(2)  # Wait before retry
+                time.sleep(2)
             else:
                 results["status"] = "error"
                 results["error"] = str(e)
