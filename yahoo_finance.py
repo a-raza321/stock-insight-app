@@ -1,3 +1,6 @@
+import yfinance as yf
+import pandas as pd
+from datetime import datetime
 def format_large_number(num):
     """
     Converts numbers to strings in Millions, Billions, or Trillions.
@@ -210,3 +213,4 @@ def run_comprehensive_analysis(ticker_symbol):
         results["status"] = "error"
         results["error"] = str(e)
         return results
+
