@@ -38,6 +38,23 @@ def get_latest_metric(df, possible_keys):
 
 def run_comprehensive_analysis(ticker_symbol):
     results = {"ticker": ticker_symbol, "status": "success", "data": {}, "error": None}
+    current_price = None
+    market_cap = None
+    low_52 = None
+    high_52 = None
+    latest_expiry = "N/A"
+    insider_val = "N/A"
+    total_assets = None
+    total_liabilities = None
+    al_ratio = None
+    runway_val = "N/A"
+    ebitda = None
+    net_debt_raw = None
+    nd_ebitda_val = "N/A"
+    severity_val = "N/A"
+    share_growth_val = "N/A" 
+    dol_val = "N/A"
+    csp_status = "No converts / ATM"
     try:
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.info
@@ -213,3 +230,4 @@ def run_comprehensive_analysis(ticker_symbol):
         results["status"] = "error"
         results["error"] = str(e)
         return results
+
