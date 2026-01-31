@@ -32,10 +32,20 @@ def get_moat_score(ticker: str):
 
         SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
         TABLE_ID = st.secrets["TABLE_ID"]
+        if "private_key" in SERVICE_ACCOUNT_JSON:
+            SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
+            json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
+            temp_key_path = temp_key_file.name
 
+        credentials = service_account.Credentials.from_service_account_file(temp_key_path)
+        client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+
+        
+        
         # Initialize BigQuery Client
-        credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON)
-        client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+        # credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON)
+        # client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # SQL Query for BigQuery
         query = f"""
@@ -181,4 +191,5 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
