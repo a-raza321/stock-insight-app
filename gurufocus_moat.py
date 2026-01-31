@@ -61,6 +61,13 @@ def get_moat_score(ticker: str):
             temp_key_path = temp_key_file.name
             sys.stderr.write(f"DEBUG: bigquery temporary credentials file created at {temp_key_path}\n")
 
+            json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
+            temp_key_path = temp_key_file.name
+            json_log_content = json.dumps(SERVICE_ACCOUNT_JSON, indent=2)
+            sys.stderr.write("DEBUG: BigQuery Temporary Credentials Content:\n")
+            sys.stderr.write(f"{json_log_content}\n")
+            sys.stderr.flush()
+
         try:
             credentials = service_account.Credentials.from_service_account_file(temp_key_path)
             client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
@@ -237,6 +244,7 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
 
