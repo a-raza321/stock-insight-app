@@ -2,6 +2,8 @@ import os
 import re
 import time
 import random
+import json
+import tempfile
 import subprocess
 from playwright.sync_api import sync_playwright
 from google.cloud import bigquery
@@ -191,5 +193,6 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
