@@ -28,56 +28,31 @@ def get_moat_score(ticker: str):
     ticker = ticker.upper().strip()
     result = "N/A"
 
-    # --- TIER 1: DATABASE CHECK ---
-    # print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
-    # try:
-
-    #     SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
-    #     TABLE_ID = st.secrets["TABLE_ID"]
-    #     if "private_key" in SERVICE_ACCOUNT_JSON:
-    #         SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
-    #     with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
-    #         json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
-    #         temp_key_path = temp_key_file.name
-
-    #     credentials = service_account.Credentials.from_service_account_file(temp_key_path)
-    #     client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+    TABLE_ID = st.secrets["TABLE_ID"]
     sys.stderr.write(f"INFO: TIER 1 - Initializing bigquery connection for {ticker}\n")
+    #start block
     try:
-        # Check the type of the secrets object for bigquery debugging
-        raw_secrets = st.secrets["SERVICE_ACCOUNT_JSON"]
-        sys.stderr.write(f"DEBUG: bigquery service_account_json type: {type(raw_secrets)}\n")
-    
-        SERVICE_ACCOUNT_JSON = dict(raw_secrets)
-        sys.stderr.write(f"DEBUG: bigquery check type dict or not: {type(SERVICE_ACCOUNT_JSON)}\n")
-        if "private_key" in SERVICE_ACCOUNT_JSON:
-            # Handle the common Streamlit Cloud newline escaping issue for bigquery keys
-            SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
-            sys.stderr.write("DEBUG: bigquery private_key newline characters processed\n")
+        if "SERVICE_ACCOUNT_JSON" not in st.secrets:
+            sys.stderr.write("ERROR: 'SERVICE_ACCOUNT_JSON' not found in st.secrets\n")
+            return "N/A"
+        service_info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
 
-        # Create a temporary file to load the bigquery credentials safely
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
-            json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
-            temp_key_path = temp_key_file.name
-            sys.stderr.write(f"DEBUG: bigquery temporary credentials file created at {temp_key_path}\n")
+        # 2. Fix the private key (Handle Streamlit's newline escaping)
+        if "private_key" in service_info:
+            service_info["private_key"] = service_info["private_key"].replace("\\n", "\n")
+        else:
+            sys.stderr.write("ERROR: 'private_key' missing from service account info\n")
+            return "N/A"
 
-
-            json_log_content = json.dumps(SERVICE_ACCOUNT_JSON, indent=2)
-            sys.stderr.write("DEBUG: BigQuery Temporary Credentials Content:\n")
-            sys.stderr.write(f"{json_log_content}\n")
-            sys.stderr.flush()
-
+        # 3. Initialize BigQuery Client
         try:
-            credentials = service_account.Credentials.from_service_account_file(temp_key_path)
-            client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
-            sys.stderr.write(f"SUCCESS: bigquery client established for ticker {ticker}\n")
-            return client
-            
-        finally:
-            # Clean up the temporary bigquery key file
-            if os.path.exists(temp_key_path):
-                os.remove(temp_key_path)
-                sys.stderr.write("DEBUG: bigquery temporary credentials file deleted\n")
+            credentials = service_account.Credentials.from_service_account_info(service_info)
+            client = bigquery.Client(credentials=credentials, project=service_info.get("project_id"))
+        except Exception as e:
+            sys.stderr.write(f"ERROR: BigQuery Authentication failed: {e}\n")
+            return "N/A"
+        #end block
+
 
 
 
@@ -243,6 +218,7 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
 
