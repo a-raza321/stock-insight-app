@@ -468,7 +468,8 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
         # 1. Authenticate and Initialize Client
         # 1. FIX THE KEY FORMATTING
         SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
-
+        print(type(SERVICE_ACCOUNT_JSON))
+        
         if "private_key" in SERVICE_ACCOUNT_JSON:
             SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
 
@@ -959,6 +960,7 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
 
