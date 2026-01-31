@@ -36,7 +36,13 @@ def get_moat_score(ticker: str):
         TABLE_ID = st.secrets["TABLE_ID"]
 
         # Initialize BigQuery Client
-        credentials = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON)
+        # 1. FIX THE KEY FORMATTING
+        info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
+        if "private_key" in info:
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
+
+        # 2. USE THE CORRECT AUTH METHOD
+        credentials = service_account.Credentials.from_service_account_info(info)
         client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # SQL Query for BigQuery
@@ -183,5 +189,6 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
