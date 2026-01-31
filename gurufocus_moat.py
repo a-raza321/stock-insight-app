@@ -22,7 +22,6 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
 ]
 
-
 def get_moat_score(ticker: str):
 
     ticker = ticker.upper().strip()
@@ -43,7 +42,7 @@ def get_moat_score(ticker: str):
     #     credentials = service_account.Credentials.from_service_account_file(temp_key_path)
     #     client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
 
-print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
+    print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
     try:
         # --- LOGGING & TYPE CHECK ---
         raw_secrets_obj = st.secrets["SERVICE_ACCOUNT_JSON"]
@@ -244,6 +243,7 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
 
