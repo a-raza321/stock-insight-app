@@ -45,9 +45,9 @@ def scrape_risk_rewards(ticker):
         "You are a precise financial data extractor specialized in the Simply Wall St (SWS) interface. "
         "Your task is to provide the 'Rewards' and 'Risks' section exactly as it appears to a user on the SWS website. \n\n"
         "STRICT EXTRACTION RULES:\n"
-        "1. Use Google Search to find the specific SWS 'Risk & Reward' analysis for the stock.\n"
-        "2. Only extract the standard UI bullet points (e.g., 'Trading at 20% below fair value').\n"
-        "3. Do NOT provide general analysis. If data is missing, return empty lists.\n"
+        "1. Use Google Search to find the specific simply wall street 'Risk & Reward' analysis for the stock.\n"
+        "2. Only extract the  bullet points display in user interface (e.g., 'Trading at 20% below fair value').\n"
+        "3. Do NOT provide general analysis or interpret risks and rewards on your own. If data is missing, return empty lists.\n"
         "4. CRITICAL: Your final output must be a valid raw JSON object string. Do not include Markdown formatting (like ```json). "
         "The format must be strictly: {\"company\": \"...\", \"rewards\": [\"...\"], \"risks\": [\"...\"]}"
     )
@@ -129,4 +129,5 @@ if __name__ == "__main__":
     ticker_input = "ospn"
     result = scrape_risk_rewards(ticker_input)
     print("\n--- FINAL OUTPUT ---")
+
     print(json.dumps(result, indent=2))
