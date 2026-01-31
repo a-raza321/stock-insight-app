@@ -465,8 +465,8 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
 
     try:
         # 1. Authenticate and Initialize Client
-       credentials = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON)
-       client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+        credentials = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON)
+        client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # 2. DELETE EXISTING TABLE
         client.delete_table(table_id, not_found_ok=True)
@@ -922,5 +922,6 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
