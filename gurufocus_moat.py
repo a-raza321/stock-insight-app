@@ -3,6 +3,7 @@ import re
 import time
 import random
 import json
+import sys
 import tempfile
 import subprocess
 from playwright.sync_api import sync_playwright
@@ -41,43 +42,36 @@ def get_moat_score(ticker: str):
 
     #     credentials = service_account.Credentials.from_service_account_file(temp_key_path)
     #     client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
-
-    print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
+    sys.stderr.write(f"INFO: TIER 1 - Initializing bigquery connection for {ticker}\n")
     try:
-        # --- LOGGING & TYPE CHECK ---
-        raw_secrets_obj = st.secrets["SERVICE_ACCOUNT_JSON"]
-        print(f"[DEBUG] Type of st.secrets object: {type(raw_secrets_obj)}")
-        
-        SERVICE_ACCOUNT_JSON = dict(raw_secrets_obj)
-        print(f"[DEBUG] Type after dict() conversion: {type(SERVICE_ACCOUNT_JSON)}")
-        
-        # Streamlit Cloud Logging
-        st.info(f"Attempting BigQuery connection for {ticker}...")
-
-        TABLE_ID = st.secrets["TABLE_ID"]
-        
+        # Check the type of the secrets object for bigquery debugging
+        raw_secrets = st.secrets["SERVICE_ACCOUNT_JSON"]
+        sys.stderr.write(f"DEBUG: bigquery service_account_json type: {type(raw_secrets)}\n")
+    
+        SERVICE_ACCOUNT_JSON = dict(raw_secrets)
+        sys.stderr.write(f"DEBUG: bigquery check type dict or not: {type(SERVICE_ACCOUNT_JSON)}\n")
         if "private_key" in SERVICE_ACCOUNT_JSON:
-            # Check for double-escaping before fixing
-            if "\\n" in SERVICE_ACCOUNT_JSON["private_key"]:
-                print("[DEBUG] Double-escaped newlines detected. Applying fix...")
-            
+            # Handle the common Streamlit Cloud newline escaping issue for bigquery keys
             SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
+            sys.stderr.write("DEBUG: bigquery private_key newline characters processed\n")
 
-        # Create temporary file
+        # Create a temporary file to load the bigquery credentials safely
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
             json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
             temp_key_path = temp_key_file.name
-            print(f"[DEBUG] Temp file created at: {temp_key_path}")
+            sys.stderr.write(f"DEBUG: bigquery temporary credentials file created at {temp_key_path}\n")
 
         try:
             credentials = service_account.Credentials.from_service_account_file(temp_key_path)
             client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
-            print("[SUCCESS] BigQuery client initialized successfully.")
+            sys.stderr.write(f"SUCCESS: bigquery client established for ticker {ticker}\n")
+            return client
+            
         finally:
-            # Clean up the temp file
+            # Clean up the temporary bigquery key file
             if os.path.exists(temp_key_path):
                 os.remove(temp_key_path)
-                print("[DEBUG] Temp file deleted.")
+                sys.stderr.write("DEBUG: bigquery temporary credentials file deleted\n")
 
 
 
@@ -243,6 +237,7 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
 
