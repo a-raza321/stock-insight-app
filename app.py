@@ -466,13 +466,43 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
     try:
         # 1. Authenticate and Initialize Client
         # 1. FIX THE KEY FORMATTING
-        info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
-        if "private_key" in info:
-            info["private_key"] = info["private_key"].replace("\\n", "\n")
+        SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
 
+        if "private_key" in SERVICE_ACCOUNT_JSON:
+            SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
+
+            # 3. Create a temporary physical file (.json) to bypass string-parsing errors
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
+            json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
+            temp_key_path = temp_key_file.name
+
+
+        credentials = service_account.Credentials.from_service_account_file(temp_key_path)
+        client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
         # 2. USE THE CORRECT AUTH METHOD
-        credentials = service_account.Credentials.from_service_account_info(info)
-        client = bigquery.Client(credentials=credentials, project=credentials.project_id)
+        # credentials = service_account.Credentials.from_service_account_info(info)
+        # client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # 2. DELETE EXISTING TABLE
         client.delete_table(table_id, not_found_ok=True)
@@ -928,6 +958,7 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
 
