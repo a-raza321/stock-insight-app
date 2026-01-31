@@ -465,7 +465,13 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
 
     try:
         # 1. Authenticate and Initialize Client
-        credentials = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON)
+        # 1. FIX THE KEY FORMATTING
+        info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
+        if "private_key" in info:
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
+
+        # 2. USE THE CORRECT AUTH METHOD
+        credentials = service_account.Credentials.from_service_account_info(info)
         client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # 2. DELETE EXISTING TABLE
@@ -922,6 +928,7 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
 
