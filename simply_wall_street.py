@@ -8,6 +8,7 @@ import streamlit as st
 POLYGON_API_KEY = st.secrets["POLYGON_API_KEY_2"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Scraper")
 
@@ -47,7 +48,7 @@ def scrape_risk_rewards(ticker):
         "STRICT EXTRACTION RULES:\n"
         "1. Use Google Search to find the specific simply wall street 'Risk & Reward' analysis for the stock.\n"
         "2. Only extract the  bullet points display in user interface (e.g., 'Trading at 20% below fair value').\n"
-        "3. Do NOT provide general analysis or interpret risks and rewards on your own. If data is missing, return empty lists.\n"
+        "3. Do NOT provide general analysis or interpret risks and rewards on your own If data is missing, return empty lists.\n"
         "4. CRITICAL: Your final output must be a valid raw JSON object string. Do not include Markdown formatting (like ```json). "
         "The format must be strictly: {\"company\": \"...\", \"rewards\": [\"...\"], \"risks\": [\"...\"]}"
     )
@@ -126,8 +127,7 @@ def scrape_risk_rewards(ticker):
 # --- Main Execution Block ---
 if __name__ == "__main__":
     logger.info("--- Starting Scraper Execution ---")
-    ticker_input = "ospn"
+    ticker_input = "veri"
     result = scrape_risk_rewards(ticker_input)
     print("\n--- FINAL OUTPUT ---")
-
     print(json.dumps(result, indent=2))
