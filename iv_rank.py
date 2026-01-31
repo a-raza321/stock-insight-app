@@ -15,7 +15,7 @@ def get_iv_rank_advanced(ticker):
     unusual_whales_url = f"https://unusualwhales.com/stock/{ticker}/volatility"
 
     # --- Configuration ---
-    proxy_config = st.secrets["proxy_config"]
+    proxy_config = dict(st.secrets["proxy_config"]),
     apiKey = st.secrets["GEMINI_API_KEY"]
 
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -158,6 +158,7 @@ if __name__ == "__main__":
 
     target = sys.argv[1] if len(sys.argv) > 1 else "meta"
     print(get_iv_rank_advanced(target))
+
 
 
 
