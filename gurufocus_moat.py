@@ -35,7 +35,7 @@ def get_moat_score(ticker: str):
         TABLE_ID = st.secrets["TABLE_ID"]
 
         # Initialize BigQuery Client
-        credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON)
+        credentials = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_JSON)
         client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # SQL Query for BigQuery
@@ -182,3 +182,4 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
