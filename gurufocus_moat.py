@@ -13,7 +13,6 @@ PROXY_PORT = "823"
 PROXY_USER = st.secrets["PROXY_USER"]
 PROXY_PASS = st.secrets["PROXY_PASS"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-GEMINI_API_KEY = "AIzaSyCD4VjvWVa_N1ftj23NIWKIzN8_1NLeH7k"
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -182,3 +181,4 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
