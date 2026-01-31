@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import streamlit as st
+import requests
 
 PROXY_HOST = "gw.dataimpulse.com"
 PROXY_PORT = "823"
@@ -182,4 +183,5 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
