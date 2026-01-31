@@ -464,23 +464,28 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
     ticker_clean = ticker.strip().upper().replace("-", "_").replace(".", "_")
     table_id = f"{DATASET_ID}.{ticker_clean}"
 
+   #start block
     try:
-        # 1. Authenticate and Initialize Client
-        # 1. FIX THE KEY FORMATTING
-        SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
-        print(type(SERVICE_ACCOUNT_JSON))
-        
-        if "private_key" in SERVICE_ACCOUNT_JSON:
-            SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
+        if "SERVICE_ACCOUNT_JSON" not in st.secrets:
+            sys.stderr.write("ERROR: 'SERVICE_ACCOUNT_JSON' not found in st.secrets\n")
+            return "N/A"
+        service_info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
 
-            # 3. Create a temporary physical file (.json) to bypass string-parsing errors
-        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
-            json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
-            temp_key_path = temp_key_file.name
+        # 2. Fix the private key (Handle Streamlit's newline escaping)
+        if "private_key" in service_info:
+            service_info["private_key"] = service_info["private_key"].replace("\\n", "\n")
+        else:
+            sys.stderr.write("ERROR: 'private_key' missing from service account info\n")
+            return "N/A"
 
-
-        credentials = service_account.Credentials.from_service_account_file(temp_key_path)
-        client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+        # 3. Initialize BigQuery Client
+        try:
+            credentials = service_account.Credentials.from_service_account_info(service_info)
+            client = bigquery.Client(credentials=credentials, project=service_info.get("project_id"))
+        except Exception as e:
+            sys.stderr.write(f"ERROR: BigQuery Authentication failed: {e}\n")
+            return "N/A"
+        #end block
 
 
 
@@ -960,6 +965,7 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
 
