@@ -29,19 +29,70 @@ def get_moat_score(ticker: str):
     result = "N/A"
 
     # --- TIER 1: DATABASE CHECK ---
-    print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
-    try:
+    # print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
+    # try:
 
-        SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
+    #     SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
+    #     TABLE_ID = st.secrets["TABLE_ID"]
+    #     if "private_key" in SERVICE_ACCOUNT_JSON:
+    #         SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
+    #     with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
+    #         json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
+    #         temp_key_path = temp_key_file.name
+
+    #     credentials = service_account.Credentials.from_service_account_file(temp_key_path)
+    #     client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+
+print(f"[INFO] TIER 1: Querying BigQuery for {ticker}...")
+    try:
+        # --- LOGGING & TYPE CHECK ---
+        raw_secrets_obj = st.secrets["SERVICE_ACCOUNT_JSON"]
+        print(f"[DEBUG] Type of st.secrets object: {type(raw_secrets_obj)}")
+        
+        SERVICE_ACCOUNT_JSON = dict(raw_secrets_obj)
+        print(f"[DEBUG] Type after dict() conversion: {type(SERVICE_ACCOUNT_JSON)}")
+        
+        # Streamlit Cloud Logging
+        st.info(f"Attempting BigQuery connection for {ticker}...")
+
         TABLE_ID = st.secrets["TABLE_ID"]
+        
         if "private_key" in SERVICE_ACCOUNT_JSON:
+            # Check for double-escaping before fixing
+            if "\\n" in SERVICE_ACCOUNT_JSON["private_key"]:
+                print("[DEBUG] Double-escaped newlines detected. Applying fix...")
+            
             SERVICE_ACCOUNT_JSON["private_key"] = SERVICE_ACCOUNT_JSON["private_key"].replace("\\n", "\n")
+
+        # Create temporary file
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_key_file:
             json.dump(SERVICE_ACCOUNT_JSON, temp_key_file)
             temp_key_path = temp_key_file.name
+            print(f"[DEBUG] Temp file created at: {temp_key_path}")
 
-        credentials = service_account.Credentials.from_service_account_file(temp_key_path)
-        client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+        try:
+            credentials = service_account.Credentials.from_service_account_file(temp_key_path)
+            client = bigquery.Client(credentials=credentials, project=SERVICE_ACCOUNT_JSON["project_id"])
+            print("[SUCCESS] BigQuery client initialized successfully.")
+        finally:
+            # Clean up the temp file
+            if os.path.exists(temp_key_path):
+                os.remove(temp_key_path)
+                print("[DEBUG] Temp file deleted.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
 
         
         
@@ -193,6 +244,7 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
+
 
 
 
