@@ -8,13 +8,12 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 import streamlit as st
 import requests
-
 PROXY_HOST = "gw.dataimpulse.com"
 PROXY_PORT = "823"
 PROXY_USER = st.secrets["PROXY_USER"]
 PROXY_PASS = st.secrets["PROXY_PASS"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-
+GEMINI_API_KEY = "AIzaSyCD4VjvWVa_N1ftj23NIWKIzN8_1NLeH7k"
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -36,13 +35,7 @@ def get_moat_score(ticker: str):
         TABLE_ID = st.secrets["TABLE_ID"]
 
         # Initialize BigQuery Client
-        # 1. FIX THE KEY FORMATTING
-        info = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
-        if "private_key" in info:
-            info["private_key"] = info["private_key"].replace("\\n", "\n")
-
-        # 2. USE THE CORRECT AUTH METHOD
-        credentials = service_account.Credentials.from_service_account_info(info)
+        credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_JSON)
         client = bigquery.Client(credentials=credentials, project=credentials.project_id)
 
         # SQL Query for BigQuery
@@ -189,6 +182,3 @@ if __name__ == "__main__":
     ticker_to_test = "meta"
     # final_score = get_moat_score(ticker_to_test)
     # print(f"\n[Final Output] {ticker_to_test}: {final_score}")
-
-
-
