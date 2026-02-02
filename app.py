@@ -257,6 +257,30 @@ def calculate_scoring(metric_name, value):
             obtained = 1
         else:
             is_rejected = True
+        elif "expiration" in name_low:
+        total = 0  # No total points assigned
+        obtained = ""  # Leave the box blank by default
+
+        # Check for N/A or empty values first
+        if val_str_low in ["n/a", "none", "error", ""]:
+            is_rejected = True
+        else:
+            try:
+                # Parse date format YYYY/MM/DD
+                exp_date = datetime.datetime.strptime(str(value), "%Y/%m/%d").date()
+                today = datetime.date.today()
+
+                # Calculate difference in months
+                diff_months = (exp_date.year - today.year) * 12 + (exp_date.month - today.month)
+
+                if diff_months < 18:
+                    is_rejected = True
+                else:
+                    # If 18+ months, obtained remains "" (blank)
+                    obtained = ""
+            except:
+                # If date format is unreadable, treat as N/A
+                is_rejected = True            
 
     # Capital Structure pressure
     elif "capital structure" in name_low:
@@ -364,7 +388,7 @@ def calculate_scoring(metric_name, value):
         total = 6
         if val_str_low in ["n/a", "none", "error"]:
             obtained = 2
-        elif 5 <= val_num <= 20:
+        elif 5 <= val_num <= 30:
             obtained = 6
         elif 2 <= val_num < 5:
             obtained = 4
@@ -843,6 +867,7 @@ def main():
                 "runway": get_pts("runway"),
                 "nd_ebitda": get_pts("net debt", "ebitda"),
                 "al_ratio": get_pts("assets", "liabilities"),
+                "expiration": get_pts("expiration"),
                 "burn": get_pts("burn"),
                 "share_growth": get_pts("share count"),
                 "cap_struct": get_pts("capital structure"),
@@ -965,6 +990,7 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
 
