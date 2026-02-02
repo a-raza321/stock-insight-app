@@ -6,7 +6,7 @@ import re
 
 import json
 import tempfile
-#DB setup
+# DB setup
 import os
 from google.cloud import bigquery
 from google.oauth2 import service_account
@@ -17,11 +17,8 @@ import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 DATASET_ID = st.secrets["DATASET_ID"]
 SERVICE_ACCOUNT_JSON = dict(st.secrets["SERVICE_ACCOUNT_JSON"])
-
-
 
 # --- WINDOWS ASYNCIO FIX ---
 if sys.platform == 'win32':
@@ -244,7 +241,7 @@ def calculate_scoring(metric_name, value):
         else:
             is_rejected = True
 
-    #share count growth
+    # share count growth
     elif "share count" in name_low:
         total = 3
         if val_str_low in ["n/a", "none", "error"]:
@@ -257,7 +254,9 @@ def calculate_scoring(metric_name, value):
             obtained = 1
         else:
             is_rejected = True
-        elif "expiration" in name_low:
+
+        # Latest Expiration Detail
+    elif "expiration" in name_low:
         total = 0  # No total points assigned
         obtained = ""  # Leave the box blank by default
 
@@ -280,7 +279,7 @@ def calculate_scoring(metric_name, value):
                     obtained = ""
             except:
                 # If date format is unreadable, treat as N/A
-                is_rejected = True            
+                is_rejected = True
 
     # Capital Structure pressure
     elif "capital structure" in name_low:
@@ -475,10 +474,7 @@ async def run_parallel_analysis(ticker):
     return results
 
 
-
-
-
-#db function
+# db function
 def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
     """
     Creates a BigQuery table named after the Ticker.
@@ -488,7 +484,7 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
     ticker_clean = ticker.strip().upper().replace("-", "_").replace(".", "_")
     table_id = f"{DATASET_ID}.{ticker_clean}"
 
-   #start block
+    # start block
     try:
         if "SERVICE_ACCOUNT_JSON" not in st.secrets:
             sys.stderr.write("ERROR: 'SERVICE_ACCOUNT_JSON' not found in st.secrets\n")
@@ -509,28 +505,8 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
         except Exception as e:
             sys.stderr.write(f"ERROR: BigQuery Authentication failed: {e}\n")
             return "N/A"
-        #end block
+        # end block
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
         # 2. USE THE CORRECT AUTH METHOD
         # credentials = service_account.Credentials.from_service_account_info(info)
         # client = bigquery.Client(credentials=credentials, project=credentials.project_id)
@@ -619,14 +595,7 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
     except Exception as e:
         logger.error(f"BIGQUERY DATABASE ERROR for {ticker}: {e}")
         return False
-    #end of function
-
-
-
-
-
-
-
+    # end of function
 
 
 def main():
@@ -867,7 +836,7 @@ def main():
                 "runway": get_pts("runway"),
                 "nd_ebitda": get_pts("net debt", "ebitda"),
                 "al_ratio": get_pts("assets", "liabilities"),
-                "expiration": get_pts("expiration"),
+                "expiration": get_pts("expiration"), #newly added
                 "burn": get_pts("burn"),
                 "share_growth": get_pts("share count"),
                 "cap_struct": get_pts("capital structure"),
@@ -966,9 +935,7 @@ def main():
 
         st.markdown("---")
 
-
-
-    #db function call
+        # db function call
         # --- TRIGGER DB SAVE ---
         # Place this at the very end of the 'else:' (Report View) block
         success = save_analysis_to_bigquery(
@@ -979,19 +946,11 @@ def main():
         )
         if success:
             st.success(f"✅ Table '{st.session_state.current_ticker}' successfully updated in Google BigQuery.")
-                #db function call end
-
-
-
-
-
+            # db function call end
 
 
 if __name__ == "__main__":
-
     main()
-
-
 
 
 
