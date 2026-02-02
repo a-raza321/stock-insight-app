@@ -51,7 +51,7 @@ def get_bigquery_client():
 
 
 # --- DATABASE HELPERS ---
-DATASET_ID = st.secrets.get("DATASET_ID")
+DATASET_ID = st.secrets["DATASET_ID"]
 
 
 @st.cache_data(ttl=600)  # Cache ticker list for 10 minutes
@@ -299,4 +299,5 @@ elif st.session_state.view == 'detail':
 
         # 🛡️ Moat Analysis
         st.markdown("#### 🛡️ Moat Analysis")
+
         st.write(get_llm_text("Moat Analysis"))
