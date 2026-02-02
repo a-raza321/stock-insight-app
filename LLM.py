@@ -72,7 +72,8 @@ Focus on how the company’s products or services benefit customers, solve probl
 Include key features, advantages, and outcomes. 
 Make sure to cover all essential points without skipping important details, using concise and clear language suitable for business understanding
 
-3. Using the most recent real data from GuruFocus, write a single concise paragraph (70–100 words) that delivers an economic moat analysis of the specified company. Base all statements strictly on GuruFocus financial and industry data, do not invent information or make assumptions. Discuss relevant moat drivers (e.g., brand strength, network effects, switching costs, cost advantages) if they are supported by the data. Likewise, address any structural or financial headwinds (e.g., price competition, low switching costs, capital intensity, margin pressure, deteriorating fundamentals). Conclude with a clear moat rating (Wide / Narrow / Weak / None), justified by the data. Your analysis may be positive, negative, or balanced depending on the company’s moat strength.
+3. 3.Using the most recent real data from GuruFocus, write a single concise paragraph (70–100 words) that delivers an economic moat analysis of the specified company. Base all statements strictly on GuruFocus business, industry, and competitive positioning data; do not invent information or make assumptions. Discuss only structural moat drivers, such as switching costs, cost advantages, intellectual property, network effects, brand strength, customer loyalty, and barriers to entry, and only when supported by the data. Do not include any financial strength metrics (e.g., balance sheet health, cash flow, ROIC, margins, or profitability trends), and do not assign or reference a moat score or rating.Your analysis may be positive, negative, or balanced depending on the company’s moat strength.
+
 
 4. Your task is to assign exactly ONE tag to a stock using a fixed decision framework.
 Allowed tags (use ONLY one):
@@ -222,4 +223,5 @@ Rules:
 if __name__ == "__main__":
     # Example usage if run directly
     result = analyze_ticker("AAPL")
+
     print(result)
