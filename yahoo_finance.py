@@ -5,6 +5,9 @@ import time
 import logging
 import streamlit as st
 import os  # Added for environment variable management
+import requests
+import json
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
 # --- Configured logging to track errors and retries ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -169,6 +172,42 @@ def run_comprehensive_analysis(ticker_symbol):
                 cash_comp, _ = get_latest_metric(a_balance_sheet, ['Cash And Cash Equivalents'])
                 if total_debt is not None and cash_comp is not None:
                     net_debt_raw = total_debt - cash_comp
+                #New block of code for implemernting LLM as fallback for getting net debt
+                if net_debt_raw is None:
+                    logging.info(f"Net Debt for {ticker_symbol} not found. Querying Gemini 2.5 Flash...")
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={GEMINI_API_KEY}"
+
+                        # Improved prompt asking for components to ensure a better answer
+                        prompt_text = (
+                            f"Analyze the most recent financial statement for {ticker_symbol}. "
+                            f"Find Total Debt and Cash/Equivalents. Calculate Net Debt (Total Debt minus Cash). "
+                            f"Return ONLY the final Net Debt as a plain number in USD. "
+                            f"Example: -5000000. No words, no commas. If impossible, return 'N/A'."
+                            f"Make sure number is up to date and most accurate. "
+                        )
+
+                        payload = {
+                            "contents": [{"parts": [{"text": prompt_text}]}]
+                        }
+                        headers = {'Content-Type': 'application/json'}
+
+                        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
+                        response.raise_for_status()
+
+                        resp_json = response.json()
+                        llm_text = resp_json['candidates'][0]['content']['parts'][0]['text'].strip()
+
+                        if llm_text.lower() != "n/a":
+                            # Updated cleaning: Keep digits, decimal points, AND negative signs
+                            clean_val = ''.join(c for c in llm_text if c.isdigit() or c in ['.', '-'])
+                            if clean_val and clean_val != '-':
+                                net_debt_raw = float(clean_val)
+                                logging.info(f"Gemini provided Net Debt for {ticker_symbol}: {net_debt_raw}")
+
+                    except Exception as e:
+                        logging.error(f"Gemini API request failed: {e}")
+                    #end of block    
 
             if ebitda is not None and ebitda != 0 and net_debt_raw is not None:
                 nd_ebitda_val = round(net_debt_raw / ebitda, 2)
@@ -272,6 +311,7 @@ def run_comprehensive_analysis(ticker_symbol):
                 results["status"] = "error"
                 results["error"] = f"Final failure for {ticker_symbol} after 2 attempts via proxy: {str(e)}"
                 return results
+
 
 
 
