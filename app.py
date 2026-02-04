@@ -527,6 +527,18 @@ def save_analysis_to_bigquery(ticker, report_data, risk_reward, llm_data):
         table = client.create_table(table)
         logger.info(f"Created table {table.project}.{table.dataset_id}.{table.table_id}")
 
+
+
+        # --- NEW CODE: WAIT FOR TABLE TO PROPAGATE ---
+        import time
+        for _ in range(5): # Try for 10 seconds total
+            try:
+                client.get_table(table_id) # Check if table exists yet
+                break
+            except:
+                time.sleep(2)
+        # ---------------------------------------------
+
         # 4. PREPARE DATA ROWS
         rows_to_insert = []
 
@@ -949,6 +961,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
