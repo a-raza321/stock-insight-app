@@ -52,24 +52,26 @@ def get_bigquery_client():
 DATASET_ID = st.secrets.get("DATASET_ID")
 MASTER_TABLE_NAME = "master_table"
 
+
 @st.cache_data(ttl=300, show_spinner=False)
 def get_master_data():
     """Fetches the ticker, score, and verdict from the master_table."""
     client = get_bigquery_client()
     if not client or not DATASET_ID: return pd.DataFrame()
-    
+
     try:
         if "." in DATASET_ID:
             table_path = f"{DATASET_ID}.{MASTER_TABLE_NAME}"
         else:
             table_path = f"{client.project}.{DATASET_ID}.{MASTER_TABLE_NAME}"
-            
+
         query = f"SELECT Ticker, Score, Verdict FROM `{table_path}`"
         job = client.query(query)
         return job.to_dataframe()
     except Exception as e:
         st.error(f"Error fetching master_table: {e}")
         return pd.DataFrame()
+
 
 def delete_ticker_table(ticker):
     """Deletes the specific ticker table and removes the entry from master_table."""
@@ -85,17 +87,18 @@ def delete_ticker_table(ticker):
                 master_table_id = f"{client.project}.{DATASET_ID}.{MASTER_TABLE_NAME}"
 
             client.delete_table(ticker_table_id, not_found_ok=True)
-            
+
             # 2. Clean up from master_table
             delete_query = f"DELETE FROM `{master_table_id}` WHERE Ticker = '{ticker}'"
             client.query(delete_query).result()
-            
+
             st.cache_data.clear()
             return True
         except Exception as e:
             st.error(f"Error deleting resources for {ticker}: {e}")
             return False
     return False
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_ticker_detail_data(ticker):
@@ -113,6 +116,7 @@ def get_ticker_detail_data(ticker):
     except Exception as e:
         st.error(f"Error fetching data for {ticker}: {e}")
         return pd.DataFrame()
+
 
 def safe_float(val):
     if val is None or str(val).lower() in ['n/a', 'none', 'rejected', '', 'nan']:
@@ -144,7 +148,7 @@ if st.session_state.view == 'history':
     if not master_df.empty:
         if search_query:
             master_df = master_df[master_df['Ticker'].str.upper().str.contains(search_query)]
-        
+
         # Table Header - Updated for new columns
         # Weights: Index(1), Ticker(2.5), Score(1.5), Verdict(2), View(1), Delete(1)
         cols = st.columns([1, 2.5, 1.5, 2, 1, 1])
@@ -161,7 +165,7 @@ if st.session_state.view == 'history':
             ticker = row['Ticker']
             score = row['Score']
             verdict = row['Verdict']
-            
+
             row_cols = st.columns([1, 2.5, 1.5, 2, 1, 1])
             row_cols[0].write(idx + 1)
             row_cols[1].write(f"**{ticker}**")
@@ -234,9 +238,11 @@ elif st.session_state.view == 'detail':
         # --- SUMMARY TABLE CALCULATION ---
         st.markdown("### Summary")
 
+
         def get_score(metric_list):
             val = df[df[m_col].isin(metric_list)][s_col].apply(safe_float).sum() if s_col in df.columns else 0
             return int(round(val))
+
 
         s1_metrics = ["Runway", "Net Debt / EBITDA", "Assets / Liabilities Ratio", "Cash Burn Severity",
                       "Share Count Growth", "Capital Structure Pressure"]
@@ -257,10 +263,14 @@ elif st.session_state.view == 'detail':
         if is_rejected:
             verdict = "❌ Rejected"
         else:
-            if final_score >= 80: verdict = "🔥 Elite LEAPS Candidate"
-            elif final_score >= 70: verdict = "✅ Qualified"
-            elif final_score >= 60: verdict = "⚠️ Watchlist"
-            else: verdict = "❌ Reject"
+            if final_score >= 80:
+                verdict = "🔥 Elite LEAPS Candidate"
+            elif final_score >= 70:
+                verdict = "✅ Qualified"
+            elif final_score >= 60:
+                verdict = "⚠️ Watchlist"
+            else:
+                verdict = "❌ Reject"
 
         summary_data = [{
             "Ticker": ticker,
@@ -273,10 +283,12 @@ elif st.session_state.view == 'detail':
         }]
         st.table(pd.DataFrame(summary_data))
 
+
         # --- QUALITATIVE SECTIONS ---
         def get_llm_text(metric_name):
             res = df[df[m_col] == metric_name]['LLM'] if m_col in df.columns and 'LLM' in df.columns else pd.Series([])
             return res.iloc[0] if not res.empty and pd.notnull(res.iloc[0]) else "N/A"
+
 
         st.markdown("#### 💰 Rewards")
         st.markdown(f'<p class="reward-text">{get_llm_text("Rewards")}</p>', unsafe_allow_html=True)
