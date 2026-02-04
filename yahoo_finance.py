@@ -175,7 +175,7 @@ def run_comprehensive_analysis(ticker_symbol):
                 if total_debt is not None and cash_comp is not None:
                     net_debt_raw = total_debt - cash_comp
 
-                    
+                    # Step 3: Gemini 2.5 Flash via Requests
                     # Fallback 3: Alpha Vantage API
                 if net_debt_raw is None:
                     logging.info(f"Net Debt for {ticker_symbol} missing in Yahoo. Querying Alpha Vantage...")
@@ -314,7 +314,6 @@ def run_comprehensive_analysis(ticker_symbol):
                 results["status"] = "error"
                 results["error"] = f"Final failure for {ticker_symbol} after 2 attempts via proxy: {str(e)}"
                 return results
-
 
 
 
