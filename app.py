@@ -257,28 +257,26 @@ def calculate_scoring(metric_name, value):
 
         # Latest Expiration Detail
     elif "expiration" in name_low:
-        total = 0  # No total points assigned
-        obtained = ""  # Leave the box blank by default
+        total = 0
+        obtained = ""
+        is_rejected = False # Explicitly ensure it's False at start
 
-        # Check for N/A or empty values first
         if val_str_low in ["n/a", "none", "error", ""]:
             is_rejected = True
         else:
             try:
-                # Parse date format YYYY/MM/DD
-                exp_date = datetime.datetime.strptime(str(value), "%Y/%m/%d").date()
+                # Use pd.to_datetime to be more flexible with formats (handles - or /)
+                exp_date = pd.to_datetime(value).date()
                 today = datetime.date.today()
 
-                # Calculate difference in months
                 diff_months = (exp_date.year - today.year) * 12 + (exp_date.month - today.month)
 
                 if diff_months < 18:
                     is_rejected = True
                 else:
-                    # If 18+ months, obtained remains "" (blank)
-                    obtained = ""
+                    obtained = "Pass" # Give it a value so you know it cleared
             except:
-                # If date format is unreadable, treat as N/A
+                # Only reject if it's truly not a date
                 is_rejected = True
 
     # Capital Structure pressure
@@ -951,6 +949,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
