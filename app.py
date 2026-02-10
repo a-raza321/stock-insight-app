@@ -890,7 +890,7 @@ else:
                 return "0"
 
 
-            m_pts = {"runway": get_pts("runway"), "nd_ebitda": get_pts("net debt", "ebitda"),
+            m_pts = {"runway": get_pts("runway"), "expiration": get_pts("expiration"), "nd_ebitda": get_pts("net debt", "ebitda"),
                      "al_ratio": get_pts("assets", "liabilities"), "burn": get_pts("burn"),
                      "share_growth": get_pts("share count"), "cap_struct": get_pts("capital structure"),
                      "mcap": get_pts("market cap"), "eps_growth": get_pts("eps growth"),
@@ -952,3 +952,4 @@ else:
             save_analysis_to_bigquery(st.session_state.current_ticker, st.session_state.report_data,
                                       st.session_state.risk_reward_data, st.session_state.llm_analysis)
             st.success("Analysis saved to BigQuery.")
+
