@@ -15,6 +15,7 @@ ALPHA_VANTAGE_KEY = st.secrets["ALPHA_VANTAGE_API_KEY_3"]
 # --- Configured logging to track errors and retries ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
 def format_large_number(num):
     """
     Converts numbers to strings in Millions, Billions, or Trillions.
@@ -31,6 +32,7 @@ def format_large_number(num):
         return f"{num / 1_000_000:.2f} Million"
     else:
         return f"{num:.2f}"
+
 
 def get_latest_metric(df, possible_keys):
     """
@@ -49,6 +51,7 @@ def get_latest_metric(df, possible_keys):
                 continue
     return None, None
 
+
 def run_comprehensive_analysis(ticker_symbol):
     # Proxy Configuration from first code
     PROXY_USER = st.secrets["PROXY_USER"]
@@ -56,7 +59,7 @@ def run_comprehensive_analysis(ticker_symbol):
     PROXY_HOST = "gw.dataimpulse.com"
     PROXY_PORT = "823"
     proxy_url = f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
-    
+
     # Proxy dictionary for requests (Alpha Vantage)
     proxies = {
         "http": proxy_url,
@@ -99,7 +102,7 @@ def run_comprehensive_analysis(ticker_symbol):
         try:
             # Logging attempt with proxy info as in first code
             logging.info(f"Attempt {retry_count + 1} for {ticker_symbol} using proxy {proxy_url}")
-            
+
             ticker = yf.Ticker(ticker_symbol)
 
             # Fetching Info and Dataframes
@@ -123,13 +126,13 @@ def run_comprehensive_analysis(ticker_symbol):
                     ov_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={ticker_symbol}&apikey={ALPHA_VANTAGE_KEY}"
                     ov_resp = requests.get(ov_url, proxies=proxies, timeout=15)
                     ov_data = ov_resp.json()
-                    
+
                     if not current_price:
                         gq_url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ticker_symbol}&apikey={ALPHA_VANTAGE_KEY}"
                         gq_resp = requests.get(gq_url, proxies=proxies, timeout=15)
                         gq_data = gq_resp.json().get("Global Quote", {})
                         current_price = av_clean(gq_data.get("05. price"))
-                    
+
                     if not market_cap:
                         market_cap = av_clean(ov_data.get("MarketCapitalization"))
                     if not shares_outstanding:
@@ -155,7 +158,8 @@ def run_comprehensive_analysis(ticker_symbol):
                     ov_url = f"https://www.alphavantage.co/query?function=OVERVIEW&symbol={ticker_symbol}&apikey={ALPHA_VANTAGE_KEY}"
                     ov_resp = requests.get(ov_url, proxies=proxies, timeout=15)
                     ov_data = ov_resp.json()
-                    insider_own_pct = av_clean(ov_data.get("PercentInsiders")) / 100.0 if ov_data.get("PercentInsiders") else None
+                    insider_own_pct = av_clean(ov_data.get("PercentInsiders")) / 100.0 if ov_data.get(
+                        "PercentInsiders") else None
                 except:
                     pass
             insider_val = f"{insider_own_pct * 100:.2f}%" if insider_own_pct is not None else "N/A"
@@ -207,10 +211,12 @@ def run_comprehensive_analysis(ticker_symbol):
                     av_cf_url = f"https://www.alphavantage.co/query?function=CASH_FLOW&symbol={ticker_symbol}&apikey={ALPHA_VANTAGE_KEY}"
                     if current_cash is None:
                         av_bs_resp = requests.get(av_bs_url, proxies=proxies, timeout=15)
-                        current_cash = av_clean(av_bs_resp.json().get("quarterlyReports", [{}])[0].get("cashAndCashEquivalentsAtCarryingValue"))
+                        current_cash = av_clean(av_bs_resp.json().get("quarterlyReports", [{}])[0].get(
+                            "cashAndCashEquivalentsAtCarryingValue"))
                     if quarterly_ocf is None:
                         av_cf_resp = requests.get(av_cf_url, proxies=proxies, timeout=15)
-                        quarterly_ocf = av_clean(av_cf_resp.json().get("quarterlyReports", [{}])[0].get("operatingCashflow"))
+                        quarterly_ocf = av_clean(
+                            av_cf_resp.json().get("quarterlyReports", [{}])[0].get("operatingCashflow"))
                 except:
                     pass
 
@@ -250,7 +256,8 @@ def run_comprehensive_analysis(ticker_symbol):
                         av_lt_debt = av_clean(report.get("longTermDebt"))
                         net_debt_raw = (av_st_debt + av_lt_debt) - av_cash
                 except Exception as av_err:
-                    print(f"Alpha Vantage Debt/EBITDA backup failed for {ticker_symbol}: {str(av_err)}", file=sys.stderr)
+                    print(f"Alpha Vantage Debt/EBITDA backup failed for {ticker_symbol}: {str(av_err)}",
+                          file=sys.stderr)
 
             if ebitda is not None and ebitda != 0 and net_debt_raw is not None:
                 nd_ebitda_val = round(net_debt_raw / ebitda, 2)
@@ -267,7 +274,9 @@ def run_comprehensive_analysis(ticker_symbol):
                     cf_resp = requests.get(av_cf_url, proxies=proxies, timeout=15)
                     q_reports = cf_resp.json().get("quarterlyReports", [])[:4]
                     if q_reports:
-                        fcf_ttm = sum([av_clean(r.get("operatingCashflow")) - av_clean(r.get("capitalExpenditures")) for r in q_reports])
+                        fcf_ttm = sum(
+                            [av_clean(r.get("operatingCashflow")) - av_clean(r.get("capitalExpenditures")) for r in
+                             q_reports])
                 except:
                     pass
 
@@ -303,7 +312,8 @@ def run_comprehensive_analysis(ticker_symbol):
                 if ebit_v is not None:
                     ebit_row = a_financials.loc[ebit_k]
                     pct_sales = (sales.iloc[0] - sales.iloc[1]) / abs(sales.iloc[1]) if sales.iloc[1] != 0 else 0
-                    pct_ebit = (ebit_row.iloc[0] - ebit_row.iloc[1]) / abs(ebit_row.iloc[1]) if ebit_row.iloc[1] != 0 else 0
+                    pct_ebit = (ebit_row.iloc[0] - ebit_row.iloc[1]) / abs(ebit_row.iloc[1]) if ebit_row.iloc[
+                                                                                                    1] != 0 else 0
                     if pct_sales != 0:
                         dol_val = round(pct_ebit / pct_sales, 2)
 
@@ -315,7 +325,8 @@ def run_comprehensive_analysis(ticker_symbol):
                     reports = inc_resp.json().get("annualReports", [])
                     if len(reports) >= 2:
                         s1, s2 = av_clean(reports[0].get("totalRevenue")), av_clean(reports[1].get("totalRevenue"))
-                        e1, e2 = av_clean(reports[0].get("operatingIncome")), av_clean(reports[1].get("operatingIncome"))
+                        e1, e2 = av_clean(reports[0].get("operatingIncome")), av_clean(
+                            reports[1].get("operatingIncome"))
                         p_sales = (s1 - s2) / abs(s2) if s2 != 0 else 0
                         p_ebit = (e1 - e2) / abs(e2) if e2 != 0 else 0
                         if p_sales != 0:
@@ -325,7 +336,7 @@ def run_comprehensive_analysis(ticker_symbol):
 
             # 13. Capital Structure Pressure (CSP)
             debt_to_equity = info.get('debtToEquity', 0)
-            
+
             # --- Alpha Vantage Fallback for DebtToEquity (from second code) ---
             if not debt_to_equity:
                 try:
