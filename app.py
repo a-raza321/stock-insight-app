@@ -6,9 +6,9 @@ from difflib import SequenceMatcher
 import pandas as pd
 import streamlit as st
 
-# --------------------------------------------------------------------------
-# Page config
-# --------------------------------------------------------------------------
+# ==========================================================================
+# BLOCK 1: PAGE CONFIGURATION AND CONFIG CONSTANTS
+# ==========================================================================
 st.set_page_config(
     page_title="Financial Reconciliation Tool",
     page_icon="🗂️",
@@ -17,11 +17,84 @@ st.set_page_config(
 )
 
 ALLOWED_EXTENSIONS = {"csv", "xlsx", "xls", "pdf"}
-FIXED_FIELDS = ["Date", "Amount", "Reference", "Description"]
+FIXED_FIELDS = ["Amount", "Amount 2", "Date", "Reference", "Description"]
+BLANK_OPTION = "Select"
 
-# --------------------------------------------------------------------------
-# Custom CSS - gives the app a clean, "designed" look
-# --------------------------------------------------------------------------
+# ==========================================================================
+# BLOCK 2: SESSION STATE INITIALIZATION & RESET UTILITIES
+# ==========================================================================
+DEFAULT_STATE = {
+    "processed": False,
+    "df1": None,
+    "df2": None,
+    "file1_bytes": None,
+    "file1_name": None,
+    "file2_bytes": None,
+    "file2_name": None,
+    "uploader1_key": 0,
+    "uploader2_key": 0,
+    "mapping_result": None,
+    "reconciled": False,
+    "recon_results": None,
+}
+
+# Ensure all default keys are successfully pre-populated to avoid KeyErrors
+for k, v in DEFAULT_STATE.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+def clear_mapping_widget_state():
+    """Removes previously stored user dropdown choices so fresh auto-detected
+    defaults are calculated cleanly upon loading any new statements."""
+    for f in FIXED_FIELDS:
+        st.session_state.pop(f"map1_{f}", None)
+        st.session_state.pop(f"map2_{f}", None)
+
+
+def reset_app():
+    """Wipes all processing variables and increments file uploader keys
+    to completely reset the file inputs back to empty states."""
+    st.session_state.processed = False
+    st.session_state.df1 = None
+    st.session_state.df2 = None
+    st.session_state.file1_bytes = None
+    st.session_state.file1_name = None
+    st.session_state.file2_bytes = None
+    st.session_state.file2_name = None
+    st.session_state.mapping_result = None
+    st.session_state.reconciled = False
+    st.session_state.recon_results = None
+    st.session_state.uploader1_key += 1
+    st.session_state.uploader2_key += 1
+    clear_mapping_widget_state()
+
+
+def delete_file(slot: int):
+    """Removes a single statement instance, cleaning dependencies and letting
+    the user pick a brand-new file for that slot."""
+    if slot == 1:
+        st.session_state.file1_bytes = None
+        st.session_state.file1_name = None
+        st.session_state.uploader1_key += 1
+    else:
+        st.session_state.file2_bytes = None
+        st.session_state.file2_name = None
+        st.session_state.uploader2_key += 1
+
+    # Invalidate current reconciliation outputs since the input sheets changed
+    st.session_state.processed = False
+    st.session_state.df1 = None
+    st.session_state.df2 = None
+    st.session_state.mapping_result = None
+    st.session_state.reconciled = False
+    st.session_state.recon_results = None
+    clear_mapping_widget_state()
+
+
+# ==========================================================================
+# BLOCK 3: BEAUTIFIED MODERN CSS DESIGN TOKENS
+# ==========================================================================
 st.markdown(
     """
     <style>
@@ -33,23 +106,24 @@ st.markdown(
         padding: 1.6rem 1rem 1.2rem 1rem;
         margin-bottom: 1.2rem;
         border-radius: 18px;
-        background: linear-gradient(120deg, #4f46e5 0%, #7c3aed 60%, #a855f7 100%);
+        background: linear-gradient(120deg, #1e3a8a 0%, #3b82f6 60%, #60a5fa 100%);
         color: white;
-        box-shadow: 0 10px 30px rgba(99, 60, 220, 0.25);
+        box-shadow: 0 10px 30px rgba(59, 130, 246, 0.25);
     }
     .app-header h1 {
         margin: 0;
         font-size: 2.1rem;
         font-weight: 800;
         letter-spacing: -0.5px;
+        color: white !important;
     }
     .app-header p {
         margin: 0.35rem 0 0 0;
         font-size: 1.0rem;
         opacity: 0.92;
+        color: #f0fdf4 !important;
     }
-    /* Force readable dark text everywhere, regardless of the visitor's
-       system light/dark preference, so nothing renders white-on-white. */
+    /* Balanced Typography & Readability */
     .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
     div[data-testid="stMarkdownContainer"] p,
     div[data-testid="stCaptionContainer"],
@@ -57,16 +131,15 @@ st.markdown(
     div[data-testid="stWidgetLabel"] p,
     div[data-testid="stExpander"] summary,
     div[data-testid="stExpander"] p,
-    div[data-testid="stFileUploaderDropzoneInstructions"] span,
-    div[data-testid="stFileUploaderDropzoneInstructions"] small,
     div[data-testid="stMetricLabel"],
     div[data-testid="stMetricValue"] {
         color: #1f2937 !important;
     }
     div[data-testid="stCaptionContainer"] p, .stCaption {
-        color: #6b7280 !important;
+        color: #4b5563 !important;
     }
-        color: #000000;
+    .upload-label {
+        color: #111827;
         font-size: 1.05rem;
         font-weight: 700;
         margin-bottom: 0.35rem;
@@ -106,13 +179,14 @@ st.markdown(
     .section-title {
         font-size: 1.3rem;
         font-weight: 800;
-        color: #33265a;
+        color: #1e3a8a;
         margin: 1.6rem 0 0.6rem 0;
     }
+    /* Premium dark navy background for the uploader dropzone */
     div[data-testid="stFileUploaderDropzone"] {
         border-radius: 12px !important;
-        border: 2px dashed #b9a8f7 !important;
-        background: #faf9ff !important;
+        border: 2px dashed #60a5fa !important;
+        background: #1e3a8a !important;
         padding: 0.4rem 0.7rem !important;
         min-height: 0 !important;
     }
@@ -122,15 +196,17 @@ st.markdown(
     div[data-testid="stFileUploaderDropzoneInstructions"] svg {
         height: 1.1rem !important;
         width: 1.1rem !important;
+        fill: #ffffff !important;
     }
+    /* Styled file uploader instructions cleanly to white */
     div[data-testid="stFileUploaderDropzoneInstructions"] span {
         font-size: 0.78rem !important;
         line-height: 1.1rem !important;
-        color: #FFFFFF !important;
+        color: #ffffff !important;
     }
     div[data-testid="stFileUploaderDropzoneInstructions"] small {
         font-size: 0.68rem !important;
-        color: #FFFFFF !important;
+        color: #e2e8f0 !important;
     }
     div[data-testid="stFileUploaderDropzone"] button {
         padding: 0.25rem 0.7rem !important;
@@ -140,175 +216,108 @@ st.markdown(
     div[data-testid="stFileUploader"] section {
         min-height: 0 !important;
     }
-    /* Primary (Process) narrow button */
+    /* Action Buttons Design */
     div[data-testid="stButton"] button[kind="primary"] {
         border-radius: 12px;
         font-weight: 700;
         font-size: 1.0rem;
-        background: #004d26 !important;
-        color: white;
+        background: #1e3a8a !important;
+        color: white !important;
         border: none;
-        box-shadow: 0 8px 20px rgba(0, 51, 30, 0.35);
+        box-shadow: 0 8px 20px rgba(30, 58, 138, 0.3);
         transition: transform 0.15s ease;
         padding: 0.6rem 0;
     }
     div[data-testid="stButton"] button[kind="primary"]:hover {
-        background: #00512F;
+        background: #1d4ed8 !important;
         transform: translateY(-2px);
     }
     div[data-testid="stButton"] button[kind="primary"]:disabled {
-        background: #e0e0e0 !important;
-        color: #1f2937 !important;
-        color: #8a8aa3;
+        background: #e2e8f0 !important;
+        color: #94a3b8 !important;
     }
-    /* Reset button styling */
+    /* Secondary/Reset actions */
     div[data-testid="stButton"] button[kind="secondary"] {
         border-radius: 10px;
         font-weight: 700;
         border: 1.5px solid #ef4444;
-        color: #ef4444;
+        color: #ef4444 !important;
         background: white;
     }
     div[data-testid="stButton"] button[kind="secondary"]:hover {
         background: #fef2f2;
     }
-    /* Small delete (trash) buttons */
-    button[title="delete_file"] {
-        border-radius: 8px !important;
-    }
-    .mapping-row {
+    /* Modern Column Mapping Layout */
+    .mapping-card {
         background: white;
         border-radius: 12px;
-        padding: 0.6rem 0.9rem;
-        margin-bottom: 0.55rem;
-        border: 1px solid #eceefb;
-        box-shadow: 0 3px 10px rgba(20,20,43,0.04);
+        padding: 1rem 1.4rem;
+        margin-bottom: 0.8rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
-    .mapping-header {
+    .mapping-grid-header {
         font-weight: 800;
-        color: #4f46e5;
-        font-size: 0.95rem;
-        padding-bottom: 0.4rem;
-        border-bottom: 2px solid #ece6ff;
-        margin-bottom: 0.6rem;
+        color: #1e3a8a;
+        font-size: 1rem;
+        padding-bottom: 0.6rem;
+        border-bottom: 2px solid #cbd5e1;
+        margin-bottom: 0.8rem;
     }
     .badge-full {
         display:inline-block; background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0;
-        padding:0.15rem 0.6rem; border-radius:999px; font-weight:700; font-size:0.78rem;
+        padding:0.2rem 0.7rem; border-radius:999px; font-weight:700; font-size:0.78rem;
     }
     .badge-partial {
         display:inline-block; background:#fffbeb; color:#92400e; border:1px solid #fde68a;
-        padding:0.15rem 0.6rem; border-radius:999px; font-weight:700; font-size:0.78rem;
+        padding:0.2rem 0.7rem; border-radius:999px; font-weight:700; font-size:0.78rem;
     }
     .badge-split {
         display:inline-block; background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;
-        padding:0.15rem 0.6rem; border-radius:999px; font-weight:700; font-size:0.78rem;
+        padding:0.2rem 0.7rem; border-radius:999px; font-weight:700; font-size:0.78rem;
     }
     .badge-unmatched {
         display:inline-block; background:#fef2f2; color:#991b1b; border:1px solid #fecaca;
-        padding:0.15rem 0.6rem; border-radius:999px; font-weight:700; font-size:0.78rem;
+        padding:0.2rem 0.7rem; border-radius:999px; font-weight:700; font-size:0.78rem;
     }
     .recon-summary-card {
-        background:white; border:1px solid #eceefb; border-radius:14px; padding:0.9rem 1.1rem;
-        box-shadow: 0 4px 14px rgba(20,20,43,0.05); text-align:center;
+        background:white; border:1px solid #e2e8f0; border-radius:14px; padding:0.9rem 1.1rem;
+        box-shadow: 0 4px 14px rgba(20,20,43,0.03); text-align:center;
     }
-    .recon-summary-card .num { font-size:1.6rem; font-weight:800; color:#33265a; }
-    .recon-summary-card .lbl { font-size:0.8rem; color:#6b7280; font-weight:600; }
+    .recon-summary-card .num { font-size:1.6rem; font-weight:800; color:#1e3a8a; }
+    .recon-summary-card .lbl { font-size:0.8rem; color:#4b5563; font-weight:600; }
+
+    /* Background Balance Check Display */
+    .balance-card {
+        background: #f0fdf4;
+        border: 2px solid #bbf7d0;
+        border-radius: 12px;
+        padding: 1.2rem;
+        margin-bottom: 1.2rem;
+    }
+    .balance-card-error {
+        background: #fef2f2;
+        border: 2px solid #fecaca;
+        border-radius: 12px;
+        padding: 1.2rem;
+        margin-bottom: 1.2rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# --------------------------------------------------------------------------
-# Session state initialisation
-# --------------------------------------------------------------------------
-DEFAULT_STATE = {
-    "processed": False,
-    "df1": None,
-    "df2": None,
-    "file1_bytes": None,
-    "file1_name": None,
-    "file2_bytes": None,
-    "file2_name": None,
-    "uploader1_key": 0,
-    "uploader2_key": 0,
-    "mapping_result": None,
-    "reconciled": False,
-    "recon_results": None,
-}
-for k, v in DEFAULT_STATE.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
 
-
-def clear_mapping_widget_state():
-    """Remove any previously-stored column-mapping selectbox values so
-    fresh auto-detected defaults are used whenever a new pair of files
-    is processed (or the app is reset)."""
-    for f in FIXED_FIELDS:
-        st.session_state.pop(f"map1_{f}", None)
-        st.session_state.pop(f"map2_{f}", None)
-
-
-def reset_app():
-    """Wipe every piece of app state back to defaults and force fresh
-    (empty) uploader widgets by bumping their keys."""
-    st.session_state.processed = False
-    st.session_state.df1 = None
-    st.session_state.df2 = None
-    st.session_state.file1_bytes = None
-    st.session_state.file1_name = None
-    st.session_state.file2_bytes = None
-    st.session_state.file2_name = None
-    st.session_state.mapping_result = None
-    st.session_state.reconciled = False
-    st.session_state.recon_results = None
-    st.session_state.uploader1_key += 1
-    st.session_state.uploader2_key += 1
-    clear_mapping_widget_state()
-
-
-def delete_file(slot: int):
-    """Remove a single uploaded file so the user can pick a new one."""
-    if slot == 1:
-        st.session_state.file1_bytes = None
-        st.session_state.file1_name = None
-        st.session_state.uploader1_key += 1
-    else:
-        st.session_state.file2_bytes = None
-        st.session_state.file2_name = None
-        st.session_state.uploader2_key += 1
-    # Any existing processed result is now stale
-    st.session_state.processed = False
-    st.session_state.df1 = None
-    st.session_state.df2 = None
-    st.session_state.mapping_result = None
-    st.session_state.reconciled = False
-    st.session_state.recon_results = None
-    clear_mapping_widget_state()
-
-
-# --------------------------------------------------------------------------
-# Header
-# --------------------------------------------------------------------------
-st.markdown(
-    """
-    <div class="app-header">
-        <h1>🗂️ Financial Reconciliation Tool</h1>
-        <p>Match transactions between two files, automatically</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
+# ==========================================================================
+# BLOCK 4: FILE LOADER & SHEET PARSING ENGINE
+# ==========================================================================
 def get_extension(filename: str) -> str:
+    """Helper to safely retrieve lowercase string file extension."""
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
 
 def _looks_numeric(value: str) -> bool:
+    """Detect if a raw cell string conforms to float/integer shapes."""
     v = value.strip().replace(",", "")
     if not v:
         return False
@@ -318,9 +327,8 @@ def _looks_numeric(value: str) -> bool:
 
 def detect_header_row(raw: pd.DataFrame, max_scan: int = 25) -> int:
     """
-    Scan the first `max_scan` rows of a headerless dataframe and guess which
-    one is the real header row. Works even if the header isn't row 0 (e.g.
-    files that start with a title, blank rows, or metadata above the table).
+    Looks at raw sheets to find the index of the main header row, bypassing
+    blank lines, metadata headers, or title blocks.
     """
     best_idx = 0
     best_score = -1.0
@@ -333,16 +341,8 @@ def detect_header_row(raw: pd.DataFrame, max_scan: int = 25) -> int:
             continue
 
         ratio_filled = non_null / len(row)
-
-        str_count = 0
-        for val in row:
-            if pd.isna(val):
-                continue
-            s = str(val)
-            if not _looks_numeric(s):
-                str_count += 1
+        str_count = sum(1 for val in row if pd.notna(val) and not _looks_numeric(str(val)))
         ratio_text = str_count / non_null
-
         values = row.dropna().astype(str).str.strip()
         ratio_unique = (len(values.unique()) / len(values)) if len(values) else 0
 
@@ -351,14 +351,11 @@ def detect_header_row(raw: pd.DataFrame, max_scan: int = 25) -> int:
             next_row = raw.iloc[i + 1]
             next_non_null = next_row.notna().sum()
             if next_non_null:
-                next_numeric = sum(
-                    1 for v in next_row if pd.notna(v) and _looks_numeric(str(v))
-                )
+                next_numeric = sum(1 for v in next_row if pd.notna(v) and _looks_numeric(str(v)))
                 if next_numeric / next_non_null > ratio_text:
                     transition_bonus = 0.15
 
         score = (ratio_filled * 0.35) + (ratio_text * 0.35) + (ratio_unique * 0.15) + transition_bonus
-
         if score > best_score:
             best_score = score
             best_idx = i
@@ -367,6 +364,7 @@ def detect_header_row(raw: pd.DataFrame, max_scan: int = 25) -> int:
 
 
 def clean_header_labels(values):
+    """Frees sheet labels from duplicates and nan values."""
     seen = {}
     labels = []
     for j, v in enumerate(values):
@@ -383,13 +381,11 @@ def clean_header_labels(values):
 
 
 def extract_pdf_rows(file_bytes):
+    """Processes tabular records from standard PDF files using pdfplumber."""
     try:
         import pdfplumber
     except ImportError:
-        st.error(
-            "The `pdfplumber` package is required to read PDF files. "
-            "Install it with: pip install pdfplumber"
-        )
+        st.error("pdfplumber is required to extract PDF transactions. Install it via pip.")
         return None
 
     import io
@@ -404,15 +400,14 @@ def extract_pdf_rows(file_bytes):
 
 def load_dataframe(file_bytes, filename):
     """
-    Load a file (given as raw bytes) into a clean DataFrame, automatically
-    detecting the header row wherever it appears in the file.
-    Returns (dataframe, error_message).
+    Parses and sanitizes CSV, XLS, XLSX, and PDF attachments.
+    Detects dynamic offsets to normalize the top columns.
+    Uses exact physical spreadsheet index mapping.
     """
     import io
-
     ext = get_extension(filename)
     if ext not in ALLOWED_EXTENSIONS:
-        return None, f"Unsupported file type: .{ext}"
+        return None, f"Unsupported file extension: .{ext}"
 
     try:
         if ext == "csv":
@@ -422,117 +417,252 @@ def load_dataframe(file_bytes, filename):
         elif ext == "pdf":
             table_rows = extract_pdf_rows(file_bytes)
             if not table_rows:
-                return None, "No table could be detected inside this PDF."
+                return None, "No readable table structure detected inside PDF."
             width = max(len(r) for r in table_rows)
             padded = [r + [None] * (width - len(r)) for r in table_rows]
             raw = pd.DataFrame(padded)
         else:
-            return None, f"Unsupported file type: .{ext}"
+            return None, f"Unsupported file extension: .{ext}"
     except Exception as e:
-        return None, f"Could not read file: {e}"
+        return None, f"Error parsing spreadsheet format: {e}"
 
     if raw is None or raw.empty:
-        return None, "The file appears to be empty."
+        return None, "The uploaded file contains no data rows."
 
-    raw = raw.dropna(how="all").reset_index(drop=True)
+    # Keep track of original raw index as physical spreadsheet row number (1-based)
+    raw['original_row_num'] = raw.index + 1
+
+    # Drop blank lines but subset only data columns (not original_row_num)
+    data_cols = [c for c in raw.columns if c != 'original_row_num']
+    raw = raw.dropna(subset=data_cols, how="all").reset_index(drop=True)
     if raw.empty:
-        return None, "The file has no usable data."
+        return None, "The uploaded statement lacks parsed rows."
 
-    header_idx = detect_header_row(raw)
-    header_values = raw.iloc[header_idx].tolist()
+    # Exclude original_row_num for header row detection
+    raw_data_only = raw[data_cols]
+    header_idx = detect_header_row(raw_data_only)
+    header_values = raw_data_only.iloc[header_idx].tolist()
     columns = clean_header_labels(header_values)
 
+    # Slice data
     data = raw.iloc[header_idx + 1:].reset_index(drop=True)
-    data.columns = columns
-    data = data.dropna(how="all").reset_index(drop=True)
+    original_row_nums = data['original_row_num'].tolist()
 
-    return data, None
+    # Reconstruct data
+    data_final = data[data_cols].copy()
+    data_final.columns = columns
+    data_final['original_row_num'] = original_row_nums
+
+    return data_final, None
 
 
-BLANK_OPTION = "— Select —"
-
-# Column-name signal patterns, ranked best-to-worst, used to auto-detect
-# which real column in the uploaded file corresponds to each fixed field.
-# No user selection involved — this is our own rule-based detection logic,
-# used here only to pre-fill sensible defaults in the mapping dropdowns
-# (the user can always override them).
+# ==========================================================================
+# BLOCK 5: TRANSACTION TYPE DETECTION & DATA SANITIZATION HELPERS
+# ==========================================================================
 FIELD_SIGNALS = {
+    "Amount": ["payment amount", "amount", "net amount", "total", "value", "debit", "credit", "paid"],
     "Date": ["transaction date", "value date", "posting date", "date"],
-    "Amount": ["amount", "net amount", "total", "value", "debit", "credit", "paid"],
     "Reference": ["invoice", "reference", "ref no", "ref", "cheque", "txn id", "transaction id", "receipt"],
-    "Description": ["description", "narration", "particulars", "details", "memo", "remarks"],
+    "Description": ["description", "narration", "particulars", "details", "memo", "remarks", "type"],
 }
+
+# Standardize transaction categories exactly to title case ("Invoice", "Payment", etc.)
+KEYWORDS_MAP = {
+    # INVOICE
+    "sales invoice": "Invoice",
+    "tax invoice": "Invoice",
+    "sales inv": "Invoice",
+    "invoice": "Invoice",
+    "charge": "Invoice",
+    "inv": "Invoice",
+
+    # PAYMENT (CSH keyword mapped dynamically as Payment)
+    "cash receipt": "Payment",
+    "direct deposit": "Payment",
+    "payment": "Payment",
+    "receipt": "Payment",
+    "cash": "Payment",
+    "eft": "Payment",
+    "csh": "Payment",
+
+    # CREDIT NOTE
+    "credit note": "Credit Note",
+    "credit_note": "Credit Note",
+    "correction": "Credit Note",
+    "crn": "Credit Note",
+
+    # ADJUSTMENT
+    "adjustment": "Adjustment",
+    "reversal": "Adjustment",
+    "adj": "Adjustment"
+}
+
+# Sort keywords by length descending to match most descriptive phrases first
+SORTED_KEYWORDS = sorted(KEYWORDS_MAP.keys(), key=len, reverse=True)
 
 
 def auto_detect_column(columns, field):
     """
-    Pick the best real column for a fixed field using our own rules:
-    exact/near header-name matches first (in priority order), keyword
-    containment second. Returns the column name, or None if nothing
-    confidently matches.
+    Resolves matching index based on prioritized search tokens in columns list.
     """
     lowered = {c: c.lower().strip() for c in columns}
-
-    # Pass 1: exact match against a known signal phrase
     for signal in FIELD_SIGNALS[field]:
         for col, low in lowered.items():
             if low == signal:
                 return col
-
-    # Pass 2: signal phrase contained within the column header
     for signal in FIELD_SIGNALS[field]:
         for col, low in lowered.items():
             if signal in low:
                 return col
-
     return None
 
 
-def auto_detect_mapping(columns):
-    """Runs auto_detect_column for every fixed field against one file's
-    column list. Returns {field: column_name_or_None}. Used to pre-fill
-    the default value of each mapping dropdown."""
-    used = set()
-    mapping = {}
-    # Detect in priority order (Amount and Date first, since they carry the
-    # most matching weight) so a column isn't double-claimed by two fields.
-    for field in ["Amount", "Date", "Reference", "Description"]:
-        col = auto_detect_column([c for c in columns if c not in used], field)
-        mapping[field] = col
-        if col:
-            used.add(col)
-    return mapping
-
-
-# ==========================================================================
-# RECONCILIATION ENGINE
-# Deterministic, rule-based, weighted-scoring matcher (no AI).
-# ==========================================================================
-def parse_amount(val):
-    """Parse a raw cell into a float amount. Handles currency symbols,
-    thousands separators, and parentheses-as-negative accounting notation."""
+def is_blank_value(val):
+    """Check if raw cell content is empty or represents a missing ledger balance."""
     if pd.isna(val):
-        return float("nan")
+        return True
+    s = str(val).strip()
+    if s == "" or s.lower() in ("nan", "none", "—", "-"):
+        return True
+    return False
+
+
+def clean_cell_text(val):
+    """Removes standard pandas formatting fillers so cell outputs look clean."""
+    if pd.isna(val):
+        return ""
+    s = str(val).strip()
+    if s.lower() in ("nan", "n/a", "none", "unknown", "—", "-"):
+        return ""
+    return s
+
+
+def clean_amount_display(val):
+    """Formats float numeric tags directly."""
+    try:
+        v = float(val)
+        if pd.isna(v) or v == 0.0:
+            return None
+        return v
+    except (ValueError, TypeError):
+        return None
+
+
+def clean_dataframe_strings(df):
+    """
+    Wipes pandas metadata text items like nan, n/a, unknown, none and preserves
+    raw float columns intact so Streamlit's sorting engines execute normally.
+    """
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        df[col] = df[col].apply(lambda x: "" if pd.isna(x) or str(x).lower().strip() in (
+        "nan", "n/a", "none", "unknown", "—", "-") else str(x))
+    return df
+
+
+def parse_amount(val):
+    """
+    Extracts absolute float magnitude. Eliminates currency tags,
+    commas, minus signs, and parenthetical notations (e.g. (100) -> 100.0).
+    """
+    if pd.isna(val):
+        return 0.0
     s = str(val).strip()
     if s == "" or s.lower() == "nan":
-        return float("nan")
+        return 0.0
+
     neg = False
     if s.startswith("(") and s.endswith(")"):
         neg = True
         s = s[1:-1]
+    if "-" in s:
+        neg = True
+
     if s.upper().endswith("CR") or s.upper().endswith("DR"):
         s = s[:-2].strip()
+
     s = re.sub(r"[^0-9.\-]", "", s)
     if s in ("", "-", ".", "-."):
-        return float("nan")
+        return 0.0
     try:
-        v = float(s)
+        return abs(float(s))
     except ValueError:
-        return float("nan")
-    return -abs(v) if neg else v
+        return 0.0
 
 
-EXCEL_EPOCH = pd.Timestamp("1899-12-30")  # correctly accounts for Excel's 1900 leap-year bug
+def word_contains_kw(val, kw):
+    """
+    Safely matches standing keywords with custom boundaries, ensuring letters/numbers
+    are aligned but prevents overlap captures (e.g., matching "eft" inside "leftover").
+    """
+    pattern = rf"(?<![a-z]){re.escape(kw)}(?![a-z])"
+    return bool(re.search(pattern, val))
+
+
+def detect_row_category(raw_row):
+    """
+    Scans explicit transaction category columns first (Type, Document Type, Category, etc.) to
+    get standard clean accounting transaction parent categories. Falls back to description/reference
+    or global string matching only if no explicit columns match.
+    """
+    explicit_headers = [
+        "document type", "document_type", "documenttype",
+        "transaction type", "transaction_type", "transactiontype", "transaction types",
+        "transection type", "transection_type", "transectiontype", "transection types",
+        "trasection type", "trasection_type", "trasectiontype", "trasection types",
+        "type", "category", "class"
+    ]
+
+    fallback_headers = [
+        "description", "reference", "ref"
+    ]
+
+    # 1. Scan explicit classification columns first
+    matched_explicit = []
+    for col in raw_row.index:
+        col_str = str(col).lower().strip().replace("_", " ").replace("-", " ")
+        for h in explicit_headers:
+            if h == col_str or h in col_str:
+                matched_explicit.append(col)
+                break
+
+    for col in matched_explicit:
+        val = str(raw_row[col]).strip().lower()
+        if val:
+            for kw in SORTED_KEYWORDS:
+                if word_contains_kw(val, kw):
+                    return KEYWORDS_MAP[kw]
+
+    # 2. Fall back to description/reference columns only if explicit mapping didn't find anything
+    matched_fallback = []
+    for col in raw_row.index:
+        col_str = str(col).lower().strip().replace("_", " ").replace("-", " ")
+        for h in fallback_headers:
+            if h == col_str or h in col_str:
+                matched_fallback.append(col)
+                break
+
+    for col in matched_fallback:
+        val = str(raw_row[col]).strip().lower()
+        if val:
+            for kw in SORTED_KEYWORDS:
+                if word_contains_kw(val, kw):
+                    return KEYWORDS_MAP[kw]
+
+    # 3. Ultimate Fallback — Scan all remaining non-numeric columns in row
+    for col in raw_row.index:
+        val = str(raw_row[col]).strip().lower()
+        if val and not _looks_numeric(val):
+            for kw in SORTED_KEYWORDS:
+                if word_contains_kw(val, kw):
+                    return KEYWORDS_MAP[kw]
+
+    return "Unknown"
+
+
+EXCEL_EPOCH = pd.Timestamp("1899-12-30")
 
 
 def _excel_serial_to_date(serial):
@@ -540,7 +670,6 @@ def _excel_serial_to_date(serial):
         serial = float(serial)
     except (TypeError, ValueError):
         return pd.NaT
-    # Plausible Excel serial range: roughly year 1950 to 2100
     if serial < 18000 or serial > 73000:
         return pd.NaT
     try:
@@ -549,71 +678,9 @@ def _excel_serial_to_date(serial):
         return pd.NaT
 
 
-def parse_single_date(val):
-    """
-    Parse one raw cell into a standardized pandas Timestamp, trying —
-    in order:
-      1. Excel serial date numbers (e.g. 45597, whether stored as a real
-         number or as plain-digit text)
-      2. ISO and common numeric formats (YYYY-MM-DD, DD/MM/YYYY, MM-DD-YYYY...)
-      3. Day-first variants (for non-US exports)
-      4. Flexible/fuzzy parsing (e.g. "5 Jan 2024", "Jan 5, 2024")
-    Returns pd.NaT if nothing works.
-
-    NOTE: kept for reference / ad-hoc single-value use. The reconciliation
-    engine itself uses the vectorized `parse_date_series` below (much
-    faster on full columns), so this function is no longer called from
-    `build_standard_frame`.
-    """
-    if pd.isna(val):
-        return pd.NaT
-
-    # Real numeric types (openpyxl sometimes yields these) -> Excel serial
-    if isinstance(val, (int, float)) and not isinstance(val, bool):
-        return _excel_serial_to_date(val)
-
-    s = str(val).strip()
-    if s == "" or s.lower() == "nan":
-        return pd.NaT
-
-    # Plain-digit strings that look like an Excel serial (e.g. "45597")
-    if re.fullmatch(r"\d{4,6}", s):
-        candidate = _excel_serial_to_date(s)
-        if pd.notna(candidate):
-            return candidate
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-
-        # Standard parse (month-first, e.g. US-style MM/DD/YYYY)
-        parsed = pd.to_datetime(s, errors="coerce", dayfirst=False)
-        if pd.notna(parsed):
-            return parsed
-
-        # Day-first parse (e.g. UK/AU/EU-style DD/MM/YYYY)
-        parsed = pd.to_datetime(s, errors="coerce", dayfirst=True)
-        if pd.notna(parsed):
-            return parsed
-
-    # Last resort: flexible/fuzzy parsing for odd formats
-    try:
-        from dateutil import parser as _dtparser
-        try:
-            return pd.Timestamp(_dtparser.parse(s, dayfirst=False, fuzzy=True))
-        except (ValueError, OverflowError):
-            return pd.Timestamp(_dtparser.parse(s, dayfirst=True, fuzzy=True))
-    except Exception:
-        return pd.NaT
-
-
 def parse_date_series(series):
     """
-    Vectorized version of parse_single_date — parses an entire column at
-    once instead of row-by-row. Same fallback order (Excel serial -> ISO/
-    month-first -> day-first -> fuzzy dateutil), but only the rows that
-    fail one stage get passed to the next, so it's fast even on large
-    PDFs/CSVs instead of doing up to 3 slow parses per row, and it won't
-    spam the console with per-row UserWarnings.
+    Vectorized parse dates prioritizing ISO layouts, UK formats, Excel serials.
     """
     s = series.astype(str).str.strip()
     result = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
@@ -622,26 +689,21 @@ def parse_date_series(series):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
 
-        # Stage 1: plain-digit strings that look like an Excel serial number
         serial_mask = (~empty_mask) & s.str.fullmatch(r"\d{4,6}")
         if serial_mask.any():
             result.loc[serial_mask] = s[serial_mask].apply(_excel_serial_to_date)
 
-        # Stage 2: month-first pass (vectorized)
         remaining = result.isna() & ~empty_mask
         if remaining.any():
             result.loc[remaining] = pd.to_datetime(s[remaining], errors="coerce", dayfirst=False)
 
-        # Stage 3: day-first pass (vectorized)
         remaining = result.isna() & ~empty_mask
         if remaining.any():
             result.loc[remaining] = pd.to_datetime(s[remaining], errors="coerce", dayfirst=True)
 
-        # Stage 4: fuzzy fallback — only for the few stragglers left
         remaining = result.isna() & ~empty_mask
         if remaining.any():
             from dateutil import parser as _dtparser
-
             def _fuzzy(v):
                 try:
                     return pd.Timestamp(_dtparser.parse(v, dayfirst=False, fuzzy=True))
@@ -659,319 +721,506 @@ def parse_date_series(series):
 
 
 def format_date_display(val):
-    """Standardized display format for parsed dates: YYYY-MM-DD."""
     if pd.isna(val):
         return ""
     return val.strftime("%Y-%m-%d")
 
 
-def build_standard_frame(df, mapping):
-    """Turn the user's chosen mapping into a small standardized frame with
-    only the fields that were actually mapped (blank / '— Select —' fields
-    are dropped from the matching criteria entirely)."""
-    std = pd.DataFrame(index=df.index)
-    flags = {}
-    for field in FIXED_FIELDS:
-        col = mapping.get(field)
-        if col and col != BLANK_OPTION:
-            if field == "Amount":
-                std["Amount"] = df[col].apply(parse_amount)
-            elif field == "Date":
-                std["Date"] = parse_date_series(df[col])
+def build_standard_rows(df, mapping):
+    """
+    Unifies disparate sheet inputs into standard matching rows.
+    Also guesses date and description columns strictly for exact duplicate validation
+    when unselected by the user. Supports dual amount column mapping (Amount and Amount 2).
+    Saves original untranslated data to guarantee exact exception mapping.
+    """
+    rows = []
+    amount_col = mapping.get("Amount")
+    amount2_col = mapping.get("Amount 2")
+    date_col = mapping.get("Date") if mapping.get("Date") != BLANK_OPTION else None
+    ref_col = mapping.get("Reference") if mapping.get("Reference") != BLANK_OPTION else None
+    desc_col = mapping.get("Description") if mapping.get("Description") != BLANK_OPTION else None
+
+    # Guessing column candidates strictly for duplicate evaluation if unselected
+    cols_list = list(df.columns.astype(str))
+    guessed_date_col = date_col if date_col else auto_detect_column(cols_list, "Date")
+    guessed_desc_col = desc_col if desc_col else auto_detect_column(cols_list, "Description")
+
+    # Match raw type prioritized columns list (checking explicitly for type keywords first)
+    matched_type_cols = []
+    for col in df.columns:
+        col_str = str(col).lower().strip()
+        if any(kw in col_str for kw in ["type", "category", "class"]):
+            matched_type_cols.append(col)
+
+    if not matched_type_cols:
+        priority_headers = [
+            "description", "transection type", "transection_type", "transection types",
+            "trasection_type", "trasection type", "transaction type", "transaction_type",
+            "transaction types", "document type", "document_type", "reference", "ref"
+        ]
+        for col in df.columns:
+            col_str = str(col).lower().strip().replace("_", " ").replace("-", " ")
+            for p_kw in priority_headers:
+                if p_kw == col_str or p_kw in col_str:
+                    matched_type_cols.append(col)
+                    break
+
+    dates_series = parse_date_series(df[date_col]) if date_col else pd.Series(pd.NaT, index=df.index)
+
+    # Generate guess-based parsed dates securely
+    if guessed_date_col and guessed_date_col != date_col:
+        guessed_dates_series = parse_date_series(df[guessed_date_col])
+    else:
+        guessed_dates_series = dates_series
+
+    for idx, raw_row in df.iterrows():
+        # Detect row category first to guide dual-column selection
+        cat = detect_row_category(raw_row)
+
+        # Resolve raw amount values based on dual column mapping and transaction category
+        raw_amt = raw_row.get(amount_col) if amount_col else None
+        raw_amt2 = raw_row.get(amount2_col) if amount2_col else None
+
+        blank1 = is_blank_value(raw_amt)
+        blank2 = is_blank_value(raw_amt2)
+
+        final_raw_amt = None
+        is_amt_blank = True
+        is_dual_blank_payment = False
+
+        if amount_col and amount2_col:
+            # If both columns are blank/missing
+            if blank1 and blank2:
+                is_dual_blank_payment = True
+                is_amt_blank = True
+                final_raw_amt = None
             else:
-                std[field] = df[col].astype(str).str.strip()
-            flags[field] = True
-        else:
-            flags[field] = False
-    std = std.reset_index(drop=True)
-    return std, flags
+                # Dual amount columns mapped: align by transaction type dynamically
+                if cat == "Payment" and not blank2:
+                    final_raw_amt = raw_amt2
+                    is_amt_blank = False
+                elif cat == "Invoice" and not blank1:
+                    final_raw_amt = raw_amt
+                    is_amt_blank = False
+                else:
+                    # Fallback to whichever contains a value
+                    if not blank1:
+                        final_raw_amt = raw_amt
+                        is_amt_blank = False
+                    elif not blank2:
+                        final_raw_amt = raw_amt2
+                        is_amt_blank = False
+        elif amount_col:
+            final_raw_amt = raw_amt
+            is_amt_blank = blank1
+        elif amount2_col:
+            final_raw_amt = raw_amt2
+            is_amt_blank = blank2
 
+        amt = parse_amount(final_raw_amt) if final_raw_amt is not None else 0.0
+        dt = dates_series.iloc[idx] if date_col else pd.NaT
+        ref = str(raw_row.get(ref_col)).strip() if ref_col and pd.notna(raw_row.get(ref_col)) else ""
+        desc = str(raw_row.get(desc_col)).strip() if desc_col and pd.notna(raw_row.get(desc_col)) else ""
 
-def score_pair(a, b, flags):
-    """
-    Weighted scoring engine (max 100), matching every field the user mapped:
-        Exact amount match          +40   (compared by absolute value — sign is ignored,
-                                            so -5009.24 and 5009.24 are treated as equal)
-        Amount within tolerance     +25   (rounding / GST-style differences)
-        Same-day date               +20
-        Date within 2-3 days        +10
-        Exact reference match       +20
-        Description similarity      up to +20 (proportional to similarity)
-    Fields the user didn't map contribute nothing (rather than being
-    treated as a mismatch), since balances/other criteria weren't provided.
+        # Populate checked values for duplicate folder matches (guarantees exact criteria)
+        chk_dt = guessed_dates_series.iloc[idx] if guessed_date_col else pd.NaT
+        chk_dt_str = format_date_display(chk_dt) if pd.notna(chk_dt) else ""
+        chk_desc = str(raw_row.get(guessed_desc_col)).strip() if guessed_desc_col and pd.notna(
+            raw_row.get(guessed_desc_col)) else ""
 
-    IMPORTANT: when both Amount and Date are available, a pair is only ever
-    considered a valid match if BOTH agree (within tolerance) — a same
-    amount on a wildly different date is rejected outright rather than
-    being accepted on amount alone.
-    """
-    parts = []
-    amount_pts = 0
-    date_pts = 0
-    ref_pts = 0
-    desc_pts = 0
+        # Obtain 1-based physical raw Excel/CSV row number
+        original_row_num = int(raw_row.get("original_row_num", idx + 1))
 
-    amount_available = flags.get("Amount") and pd.notna(a.get("Amount")) and pd.notna(b.get("Amount"))
-    date_available = flags.get("Date") and pd.notna(a.get("Date")) and pd.notna(b.get("Date"))
+        # Save exact unmodified physical cell values for accurate display
+        orig_amount_str = str(final_raw_amt) if final_raw_amt is not None else ""
+        if amount_col and amount2_col and is_dual_blank_payment:
+            orig_amount_str = ""
 
-    if amount_available:
-        # Sign-agnostic comparison: a debit in one file and a credit in the
-        # other (e.g. -5009.24 vs 5009.24) are treated as the same amount.
-        abs_a, abs_b = abs(a["Amount"]), abs(b["Amount"])
-        diff = abs(abs_a - abs_b)
-        tol = max(0.05, abs_a * 0.02)
-        if diff <= 0.005:
-            amount_pts = 40
-            parts.append("Amount exact match, sign ignored (+40)")
-        elif diff <= tol:
-            amount_pts = 25
-            parts.append(f"Amount within tolerance (sign ignored), diff {diff:.2f} — possible GST/rounding (+25)")
-        else:
-            parts.append(f"Amount mismatch, diff {diff:.2f} (+0)")
+        orig_date_str = str(raw_row.get(date_col)) if date_col and pd.notna(raw_row.get(date_col)) else ""
+        orig_ref_str = str(raw_row.get(ref_col)) if ref_col and pd.notna(raw_row.get(ref_col)) else ""
+        orig_desc_str = str(raw_row.get(desc_col)) if desc_col and pd.notna(raw_row.get(desc_col)) else ""
 
-    if date_available:
-        d = abs((a["Date"] - b["Date"]).days)
-        if d == 0:
-            date_pts = 20
-            parts.append("Same-day date (+20)")
-        elif d <= 3:
-            date_pts = 10
-            parts.append(f"Date {d} day(s) apart (+10)")
-        else:
-            parts.append(f"Date {d} day(s) apart (+0)")
-
-    if flags.get("Reference"):
-        ra = str(a.get("Reference", "")).strip().lower()
-        rb = str(b.get("Reference", "")).strip().lower()
-        if ra and rb and ra not in ("nan", "") and ra == rb:
-            ref_pts = 20
-            parts.append("Reference exact match (+20)")
-        else:
-            parts.append("Reference no match (+0)")
-
-    if flags.get("Description"):
-        da = str(a.get("Description", "")).strip().lower()
-        db = str(b.get("Description", "")).strip().lower()
-        if da and db and da not in ("nan", "") and db not in ("nan", ""):
-            ratio = SequenceMatcher(None, da, db).ratio()
-            desc_pts = round(ratio * 20)
-            parts.append(f"Description {ratio * 100:.0f}% similar (+{desc_pts})")
-
-    # Gate: if both Amount and Date were mapped on both sides, require BOTH
-    # to actually agree — an amount match with no date agreement is rejected
-    # rather than accepted purely on amount.
-    if amount_available and date_available:
-        if amount_pts == 0 or date_pts == 0:
-            return 0, parts + ["Rejected: amount and date must both agree (+0)"]
-
-    score = amount_pts + date_pts + ref_pts + desc_pts
-    return score, parts
-
-
-def generate_candidates(df1, df2, flags):
-    """Build candidate (i, j) pairs using blocking on amount / reference so
-    we don't need a full O(n*m) description-similarity scan on large files."""
-    n1, n2 = len(df1), len(df2)
-    candidates = []
-
-    amount_bucket = {}
-    if flags.get("Amount"):
-        for j in range(n2):
-            amt = df2.iloc[j].get("Amount")
-            if pd.notna(amt):
-                amount_bucket.setdefault(round(abs(amt), 2), []).append(j)
-
-    ref_index = {}
-    if flags.get("Reference"):
-        for j in range(n2):
-            r = str(df2.iloc[j].get("Reference", "")).strip().lower()
-            if r and r != "nan":
-                ref_index.setdefault(r, []).append(j)
-
-    no_blocking_key = not flags.get("Amount") and not flags.get("Reference")
-
-    for i in range(n1):
-        a = df1.iloc[i]
-        js = set()
-        if flags.get("Amount") and pd.notna(a.get("Amount")):
-            base = round(abs(a["Amount"]), 2)
-            tol = max(0.05, base * 0.02)
-            steps = int(tol / 0.01) + 1
-            for d in range(-steps, steps + 1):
-                key = round(base + d * 0.01, 2)
-                if key in amount_bucket:
-                    js.update(amount_bucket[key])
-        if flags.get("Reference"):
-            r = str(a.get("Reference", "")).strip().lower()
-            if r and r in ref_index:
-                js.update(ref_index[r])
-        if no_blocking_key:
-            js.update(range(min(n2, 2000)))  # bounded fallback scan
-
-        for j in js:
-            b = df2.iloc[j]
-            score, parts = score_pair(a, b, flags)
-            if score > 0:
-                candidates.append((score, i, j, parts))
-
-    return candidates
-
-
-def greedy_assign(candidates, min_score=30):
-    """Assign the highest-scoring pairs first, one-to-one, never reusing a
-    row on either side (a real optimizer would use Hungarian algorithm; this
-    greedy pass is a close, fast approximation for typical statement sizes)."""
-    ordered = sorted(candidates, key=lambda x: -x[0])
-    used_i, used_j = set(), set()
-    full_matches, partial_matches = [], []
-
-    for score, i, j, parts in ordered:
-        if i in used_i or j in used_j:
-            continue
-        if score < min_score:
-            continue
-        used_i.add(i)
-        used_j.add(j)
-        record = {"i": i, "j": j, "score": score, "parts": parts}
-        if score >= 80:
-            full_matches.append(record)
-        else:
-            partial_matches.append(record)
-
-    return full_matches, partial_matches, used_i, used_j
-
-
-def find_split_and_combined(df1, df2, used_i, used_j, flags, max_combo=3, date_window=10, pool_limit=25):
-    """
-    Split payment: one file-1 transaction == sum of several file-2 transactions.
-    Combined payment: several file-1 transactions == one file-2 transaction.
-    Skipped gracefully if Amount wasn't mapped, or if the leftover pool is
-    too large to brute-force safely.
-    """
-    splits, combined = [], []
-    if not flags.get("Amount"):
-        return splits, combined, used_i, used_j
-
-    leftover1 = [i for i in range(len(df1)) if i not in used_i]
-    leftover2 = [j for j in range(len(df2)) if j not in used_j]
-
-    if len(leftover1) > 400 or len(leftover2) > 400:
-        return splits, combined, used_i, used_j  # too large to brute-force safely
-
-    def amount_ok(target, total):
-        # Sign-agnostic: compare magnitudes only.
-        return abs(abs(total) - abs(target)) <= max(0.05, abs(target) * 0.02)
-
-    def within_window(a, b):
-        if flags.get("Date") and pd.notna(a.get("Date")) and pd.notna(b.get("Date")):
-            return abs((a["Date"] - b["Date"]).days) <= date_window
-        return True
-
-    used_j_local = set()
-    for i in leftover1:
-        a = df1.iloc[i]
-        if pd.isna(a.get("Amount")):
-            continue
-        pool = [j for j in leftover2 if j not in used_j_local and pd.notna(df2.iloc[j].get("Amount")) and within_window(a, df2.iloc[j])]
-        pool = pool[:pool_limit]
-        found = None
-        for r in range(2, max_combo + 1):
-            for combo in itertools.combinations(pool, r):
-                total = sum(df2.iloc[j]["Amount"] for j in combo)
-                if amount_ok(a["Amount"], total):
-                    found = combo
-                    break
-            if found:
+        # Extract the raw, original transaction type string from mapped prioritized headers
+        raw_type_val = ""
+        for col in matched_type_cols:
+            val_str = str(raw_row.get(col, "")).strip()
+            if val_str:
+                raw_type_val = val_str
                 break
-        if found:
-            splits.append({"i": i, "js": list(found), "target": a["Amount"], "sum": sum(df2.iloc[j]["Amount"] for j in found)})
-            used_j_local.update(found)
 
-    split_i_used = {s["i"] for s in splits}
-    leftover1_remaining = [i for i in leftover1 if i not in split_i_used]
-    leftover2_remaining = [j for j in leftover2 if j not in used_j_local]
-
-    used_i_local = set()
-    for j in leftover2_remaining:
-        b = df2.iloc[j]
-        if pd.isna(b.get("Amount")):
-            continue
-        pool = [i for i in leftover1_remaining if i not in used_i_local and pd.notna(df1.iloc[i].get("Amount")) and within_window(df1.iloc[i], b)]
-        pool = pool[:pool_limit]
-        found = None
-        for r in range(2, max_combo + 1):
-            for combo in itertools.combinations(pool, r):
-                total = sum(df1.iloc[i]["Amount"] for i in combo)
-                if amount_ok(b["Amount"], total):
-                    found = combo
-                    break
-            if found:
-                break
-        if found:
-            combined.append({"j": j, "is": list(found), "target": b["Amount"], "sum": sum(df1.iloc[i]["Amount"] for i in found)})
-            used_i_local.update(found)
-
-    final_used_i = set(used_i) | split_i_used | used_i_local
-    final_used_j = set(used_j) | used_j_local | {c["j"] for c in combined}
-    return splits, combined, final_used_i, final_used_j
+        rows.append({
+            "idx": idx,
+            "original_row_num": original_row_num,
+            "amount": amt,
+            "date": dt,
+            "reference": ref,
+            "description": desc,
+            "category": cat,
+            "is_blank_amount": is_amt_blank,
+            "is_dual_blank_payment": is_dual_blank_payment,
+            "check_date": chk_dt_str,
+            "check_description": chk_desc,
+            # Original raw sheet metadata for consistent error reporting
+            "orig_amount": orig_amount_str,
+            "orig_date": orig_date_str,
+            "orig_ref": orig_ref_str,
+            "orig_desc": orig_desc_str,
+            "raw_type": raw_type_val if raw_type_val else "Transection type is missing"
+        })
+    return rows
 
 
-def find_duplicates(df, flags):
-    """Flag rows within a single file that look like duplicate entries."""
-    key_cols = []
-    if flags.get("Amount"):
-        key_cols.append("Amount")
-    if flags.get("Reference"):
-        key_cols.append("Reference")
-    elif flags.get("Date"):
-        key_cols.append("Date")
-    if not key_cols or "Amount" not in key_cols:
-        return pd.DataFrame()
-    sub = df.dropna(subset=key_cols, how="any")
-    if sub.empty:
-        return pd.DataFrame()
-    dup_mask = sub.duplicated(subset=key_cols, keep=False)
-    return sub[dup_mask].copy()
+# ==========================================================================
+# BLOCK 6: WEIGHTED MATCHING SCORING ENGINE (90% AMOUNT, 5% DATE, 5% REF)
+# ==========================================================================
+def score_pair(a, b, show_date, show_ref):
+    """
+    Score validation engine (Max 100):
+    - Exact Amount match (diff <= 0.02) = 90 pts
+    - Same Date = 5 pts, within 3 days = 3 pts, within 10 days = 1 pt (only evaluated if Date mapped in both)
+    - Exact Reference match = 5 pts (only evaluated if Reference mapped in both)
+    """
+    # Guard clause: do not match if either has amount missing
+    if a.get("is_blank_amount", False) or b.get("is_blank_amount", False):
+        return 0, []
+
+    amt_diff = abs(a["amount"] - b["amount"])
+    if amt_diff > 0.02:
+        return 0, []
+
+    score = 90
+    basis = ["Amount exact match (+90)"]
+
+    if show_date and pd.notna(a["date"]) and pd.notna(b["date"]):
+        days = abs((a["date"] - b["date"]).days)
+        if days == 0:
+            score += 5
+            basis.append("Same-day date (+5)")
+        elif days <= 3:
+            score += 3
+            basis.append(f"Date within {days} days (+3)")
+        elif days <= 10:
+            score += 1
+            basis.append(f"Date within {days} days (+1)")
+        else:
+            basis.append(f"Date mismatch ({days} days) (+0)")
+
+    if show_ref:
+        ra = str(a["reference"]).strip().lower()
+        rb = str(b["reference"]).strip().lower()
+        if ra and rb and ra != "nan" and rb != "nan" and ra == rb:
+            score += 5
+            basis.append("Reference exact match (+5)")
+
+    return score, basis
 
 
+# ==========================================================================
+# BLOCK 7: MULTI-PASS RECONCILIATION ENGINE
+# ==========================================================================
 def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
-    """Runs the full multi-pass reconciliation and returns a results dict."""
-    std1, flags1 = build_standard_frame(df1_orig, mapping1)
-    std2, flags2 = build_standard_frame(df2_orig, mapping2)
-    # Combined flags: a field only "counts" for scoring if mapped on both sides
-    flags = {f: (flags1.get(f, False) and flags2.get(f, False)) for f in FIXED_FIELDS}
+    """
+    Performs comprehensive intra-sheet offset mapping, cross-sheet direct matching,
+    combinatorial sum grouping (1-to-Many, Many-to-1), and error classification.
+    """
+    show_date = mapping1.get("Date") is not None and mapping2.get("Date") is not None
+    show_ref = mapping1.get("Reference") is not None and mapping2.get("Reference") is not None
 
-    # Pass 1 & 2 & 3 combined into one weighted-scoring pass (see score_pair)
-    candidates = generate_candidates(std1, std2, flags)
-    full_matches, partial_matches, used_i, used_j = greedy_assign(candidates, min_score=30)
+    rows1 = build_standard_rows(df1_orig, mapping1)
+    rows2 = build_standard_rows(df2_orig, mapping2)
 
-    # Pass 4: split & combined payments
-    splits, combined, used_i, used_j = find_split_and_combined(std1, std2, used_i, used_j, flags)
+    categories = ["Invoice", "Payment", "Credit Note", "Adjustment", "Unknown"]
+    totals1 = {cat: 0.0 for cat in categories}
+    totals2 = {cat: 0.0 for cat in categories}
+    counts1 = {cat: 0 for cat in categories}
+    counts2 = {cat: 0 for cat in categories}
 
-    # Remaining exceptions
-    unmatched1 = [i for i in range(len(std1)) if i not in used_i]
-    unmatched2 = [j for j in range(len(std2)) if j not in used_j]
+    for r in rows1:
+        if not r.get("is_blank_amount", False):
+            totals1[r["category"]] += r["amount"]
+        counts1[r["category"]] += 1
 
-    duplicates1 = find_duplicates(std1, flags1)
-    duplicates2 = find_duplicates(std2, flags2)
+    for r in rows2:
+        if not r.get("is_blank_amount", False):
+            totals2[r["category"]] += r["amount"]
+        counts2[r["category"]] += 1
+
+    # Standard Accounting Balance Policy matching Title Case indicators exactly:
+    # Starting from absolute 0. Payment, Credit Note, Adjustment add (+). Invoice subtract (-). Unknown excluded.
+    bal1 = 0.0 + totals1["Payment"] + totals1["Credit Note"] + totals1["Adjustment"] - totals1["Invoice"]
+    bal2 = 0.0 + totals2["Payment"] + totals2["Credit Note"] + totals2["Adjustment"] - totals2["Invoice"]
+    balance_diff = bal1 - bal2
+
+    # Extract all unclassified Unknown records for distinct audit folder isolation
+    unclassified1 = [r for r in rows1 if r["category"] == "Unknown"]
+    unclassified2 = [r for r in rows2 if r["category"] == "Unknown"]
+
+    intra_sheet_matches1 = []
+    intra_sheet_matches2 = []
+    intra_used1 = set()
+    intra_used2 = set()
+
+    # ---- PASS 0: Internal self-offsets inside Sheet 1 ----
+    for i in range(len(rows1)):
+        if i in intra_used1:
+            continue
+        r1_a = rows1[i]
+        if r1_a.get("is_blank_amount", False):
+            continue
+        for j in range(i + 1, len(rows1)):
+            if j in intra_used1:
+                continue
+            r1_b = rows1[j]
+            if r1_b.get("is_blank_amount", False):
+                continue
+
+            if abs(r1_a["amount"] - r1_b["amount"]) <= 0.01:
+                is_offset = False
+                if (r1_a["category"] == "Payment" and r1_b["category"] in ("Credit Note", "Adjustment")) or \
+                        (r1_b["category"] == "Payment" and r1_a["category"] in ("Credit Note", "Adjustment")):
+                    is_offset = True
+                elif (r1_a["category"] == "Invoice" and r1_b["category"] in ("Credit Note", "Adjustment")) or \
+                        (r1_b["category"] == "Invoice" and r1_a["category"] in ("Credit Note", "Adjustment")):
+                    is_offset = True
+
+                if is_offset:
+                    intra_used1.update([i, j])
+                    intra_sheet_matches1.append({
+                        "row_a": r1_a,
+                        "row_b": r1_b,
+                        "amount": r1_a["amount"],
+                        "type": "Intra-Sheet Offset"
+                    })
+                    break
+
+    # ---- PASS 0: Internal self-offsets inside Sheet 2 ----
+    for i in range(len(rows2)):
+        if i in intra_used2:
+            continue
+        r2_a = rows2[i]
+        if r2_a.get("is_blank_amount", False):
+            continue
+        for j in range(i + 1, len(rows2)):
+            if j in intra_used2:
+                continue
+            r2_b = rows2[j]
+            if r2_b.get("is_blank_amount", False):
+                continue
+
+            if abs(r2_a["amount"] - r2_b["amount"]) <= 0.01:
+                is_offset = False
+                if (r2_a["category"] == "Payment" and r2_b["category"] in ("Credit Note", "Adjustment")) or \
+                        (r2_b["category"] == "Payment" and r2_a["category"] in ("Credit Note", "Adjustment")):
+                    is_offset = True
+                elif (r2_a["category"] == "Invoice" and r2_b["category"] in ("Credit Note", "Adjustment")) or \
+                        (r2_b["category"] == "Invoice" and r2_a["category"] in ("Credit Note", "Adjustment")):
+                    is_offset = True
+
+                if is_offset:
+                    intra_used2.update([i, j])
+                    intra_sheet_matches2.append({
+                        "row_a": r2_a,
+                        "row_b": r2_b,
+                        "amount": r2_a["amount"],
+                        "type": "Intra-Sheet Offset"
+                    })
+                    break
+
+    matched_inter1 = set()
+    matched_inter2 = set()
+    inter_sheet_matches = []
+
+    # ---- PASS 1: Direct Category & Direct Payment vs Invoice matches ----
+    direct_candidates = []
+    for i, r1 in enumerate(rows1):
+        if i in intra_used1 or r1.get("is_blank_amount", False):
+            continue
+        for j, r2 in enumerate(rows2):
+            if j in intra_used2 or r2.get("is_blank_amount", False):
+                continue
+
+            score, basis = score_pair(r1, r2, show_date, show_ref)
+            if score >= 90:
+                match_type = ""
+                if r1["category"] == r2["category"] and r1["category"] != "Unknown":
+                    match_type = "Direct Match"
+                elif (r1["category"] == "Payment" and r2["category"] == "Invoice") or \
+                        (r1["category"] == "Invoice" and r2["category"] == "Payment"):
+                    match_type = "Direct Match"
+
+                if match_type:
+                    direct_candidates.append({
+                        "score": score, "i": i, "j": j,
+                        "type": match_type, "basis": basis
+                    })
+
+    direct_candidates = sorted(direct_candidates, key=lambda x: -x["score"])
+    for cand in direct_candidates:
+        if cand["i"] in matched_inter1 or cand["j"] in matched_inter2:
+            continue
+        matched_inter1.add(cand["i"])
+        matched_inter2.add(cand["j"])
+        inter_sheet_matches.append({
+            "row1": rows1[cand["i"]], "row2": rows2[cand["j"]],
+            "score": cand["score"], "type": cand["type"], "basis": "; ".join(cand["basis"])
+        })
+
+    # ---- PASS 2: Cross-Type absolute amount offsets ----
+    cross_candidates = []
+    for i, r1 in enumerate(rows1):
+        if i in intra_used1 or i in matched_inter1 or r1.get("is_blank_amount", False):
+            continue
+        for j, r2 in enumerate(rows2):
+            if j in intra_used2 or j in matched_inter2 or r2.get("is_blank_amount", False):
+                continue
+
+            score, basis = score_pair(r1, r2, show_date, show_ref)
+            if score >= 90:
+                label = "Cross-Type Offset"
+                cross_candidates.append({
+                    "score": score, "i": i, "j": j,
+                    "type": label, "basis": basis
+                })
+
+    cross_candidates = sorted(cross_candidates, key=lambda x: -x["score"])
+    for cand in cross_candidates:
+        if cand["i"] in matched_inter1 or cand["j"] in matched_inter2:
+            continue
+        matched_inter1.add(cand["i"])
+        matched_inter2.add(cand["j"])
+        inter_sheet_matches.append({
+            "row1": rows1[cand["i"]], "row2": rows2[cand["j"]],
+            "score": cand["score"], "type": cand["type"], "basis": "; ".join(cand["basis"])
+        })
+
+    # ---- PASS 3: One-to-Many Combinatorial Sum Checks ----
+    leftover1 = [i for i in range(len(rows1)) if i not in intra_used1 and i not in matched_inter1]
+    leftover2 = [j for j in range(len(rows2)) if j not in intra_used2 and j not in matched_inter2]
+    advanced_matches = []
+
+    for i in leftover1:
+        if i in matched_inter1:
+            continue
+        r1 = rows1[i]
+        if r1.get("is_blank_amount", False):
+            continue
+        pool = [j for j in leftover2 if j not in matched_inter2 and not rows2[j].get("is_blank_amount", False)][:30]
+
+        found = None
+        for r in range(2, 4):
+            for combo in itertools.combinations(pool, r):
+                combo_sum = sum(rows2[j]["amount"] for j in combo)
+                if abs(r1["amount"] - combo_sum) <= 0.05:
+                    found = combo
+                    break
+            if found:
+                break
+
+        if found:
+            matched_inter1.add(i)
+            for j in found:
+                matched_inter2.add(j)
+            advanced_matches.append({
+                "row1": r1, "rows2": [rows2[j] for j in found],
+                "score": 90,
+                "type": "One-to-Many Sum Match",
+                "basis": "Matched sum of items"
+            })
+
+    # ---- PASS 3: Many-to-One Combinatorial Sum Checks ----
+    leftover1 = [i for i in range(len(rows1)) if i not in intra_used1 and i not in matched_inter1]
+    leftover2 = [j for j in range(len(rows2)) if j not in intra_used2 and j not in matched_inter2]
+
+    for j in leftover2:
+        if j in matched_inter2:
+            continue
+        r2 = rows2[j]
+        if r2.get("is_blank_amount", False):
+            continue
+        pool = [i for i in leftover1 if i not in matched_inter1 and not rows1[i].get("is_blank_amount", False)][:30]
+
+        found = None
+        for r in range(2, 4):
+            for combo in itertools.combinations(pool, r):
+                combo_sum = sum(rows1[i]["amount"] for i in combo)
+                if abs(r2["amount"] - combo_sum) <= 0.05:
+                    found = combo
+                    break
+            if found:
+                break
+
+        if found:
+            matched_inter2.add(j)
+            for i in found:
+                matched_inter1.add(i)
+            advanced_matches.append({
+                "row2": r2, "rows1": [rows1[i] for i in found],
+                "score": 90,
+                "type": "Many-to-One Sum Match",
+                "basis": "Matched sum of items"
+            })
+
+    unmatched1 = [i for i in range(len(rows1)) if i not in intra_used1 and i not in matched_inter1]
+    unmatched2 = [j for j in range(len(rows2)) if j not in intra_used2 and j not in matched_inter2]
+
+    def separate_exceptions_and_duplicates(rows_list, unmatched_idxs):
+        """
+        Groups unmatched rows. Flags a transaction as a duplicate ONLY when the
+        Amount, Date, and Description fields match exactly.
+        If a mapped payment & invoice split contains blank amounts on both fields,
+        it is classified as a "Missing Payment Category" exception.
+        """
+        freq = {}
+        for idx in unmatched_idxs:
+            r = rows_list[idx]
+            if r.get("is_blank_amount", False):
+                continue
+
+            # Map exact duplication key to Amount, Date, and Description strictly!
+            key = (r["amount"], r["check_date"], r["check_description"].lower().strip())
+            freq[key] = freq.get(key, 0) + 1
+
+        exceptions = []
+        duplicates = []
+        for idx in unmatched_idxs:
+            r = rows_list[idx]
+            r_copy = r.copy()
+            if r.get("is_blank_amount", False):
+                if r.get("is_dual_blank_payment", False):
+                    r_copy["exception_type"] = "Missing Payment Category"
+                else:
+                    r_copy["exception_type"] = "Amount not available"
+                exceptions.append(r_copy)
+            else:
+                key = (r["amount"], r["check_date"], r["check_description"].lower().strip())
+                if freq[key] > 1:
+                    r_copy["exception_type"] = f"Duplicate {r['category']}"
+                    duplicates.append(r_copy)
+                else:
+                    r_copy["exception_type"] = f"Missing {r['category']}"
+                    exceptions.append(r_copy)
+        return exceptions, duplicates
+
+    exceptions1, dupes1 = separate_exceptions_and_duplicates(rows1, unmatched1)
+    exceptions2, dupes2 = separate_exceptions_and_duplicates(rows2, unmatched2)
 
     return {
-        "std1": std1, "std2": std2, "flags": flags, "flags1": flags1, "flags2": flags2,
-        "full_matches": full_matches, "partial_matches": partial_matches,
-        "splits": splits, "combined": combined,
-        "unmatched1": unmatched1, "unmatched2": unmatched2,
-        "duplicates1": duplicates1, "duplicates2": duplicates2,
+        "totals1": totals1, "totals2": totals2,
+        "counts1": counts1, "counts2": counts2,
+        "bal1": bal1, "bal2": bal2, "bal_diff": balance_diff,
+        "unclassified1": unclassified1, "unclassified2": unclassified2,
+        "intra1": intra_sheet_matches1, "intra2": intra_sheet_matches2,
+        "inter_matches": inter_sheet_matches,
+        "advanced_matches": advanced_matches,
+        "exceptions1": exceptions1, "exceptions2": exceptions2,
+        "dupes1": dupes1, "dupes2": dupes2
     }
 
 
+# ==========================================================================
+# BLOCK 8: STREAMLIT RENDERS HELPERS & FILE SLOTS
+# ==========================================================================
 def render_upload_slot(col, slot: int):
-    """
-    Renders one upload slot:
-    - If no file stored yet -> show the file_uploader.
-    - If a file IS stored -> hide the uploader, show a card with the
-      filename, its extension badge, and a Delete button. The uploader
-      only re-appears after Delete is pressed.
-    """
     name_key = f"file{slot}_name"
     bytes_key = f"file{slot}_bytes"
     uploader_key = f"uploader{slot}_key"
@@ -995,8 +1244,7 @@ def render_upload_slot(col, slot: int):
                     st.rerun()
                 else:
                     st.markdown(
-                        f'<div class="file-err">❌ \'.{ext}\' is not supported. '
-                        f'Please upload CSV, XLSX, XLS, or PDF.</div>',
+                        f'<div class="file-err">❌ \'.{ext}\' is not supported. Please upload CSV, XLSX, XLS, or PDF.</div>',
                         unsafe_allow_html=True,
                     )
         else:
@@ -1004,8 +1252,7 @@ def render_upload_slot(col, slot: int):
             info_col, del_col = st.columns([5, 1])
             with info_col:
                 st.markdown(
-                    f'<div class="file-ok">✅ <b>{st.session_state[name_key]}</b>'
-                    f'<span class="file-ext-badge">{ext}</span></div>',
+                    f'<div class="file-ok">✅ <b>{st.session_state[name_key]}</b><span class="file-ext-badge">{ext}</span></div>',
                     unsafe_allow_html=True,
                 )
             with del_col:
@@ -1014,10 +1261,20 @@ def render_upload_slot(col, slot: int):
                     st.rerun()
 
 
+# ==========================================================================
+# BLOCK 9: STREAMLIT UI ROUTING, MAPPING TABLE & DETAILED REPORTS
+# ==========================================================================
+# Display Dynamic Application Title Header Exactly
+st.markdown(
+    """
+    <div class="app-header">
+        <h1>🗂️ Financial Reconciliation Tool</h1>
+        <p>Smart transaction categorization, comparative balance calculations & prioritization-based matching</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-# --------------------------------------------------------------------------
-# Upload section
-# --------------------------------------------------------------------------
 col1, col2 = st.columns(2, gap="large")
 render_upload_slot(col1, 1)
 render_upload_slot(col2, 2)
@@ -1027,23 +1284,20 @@ file2_ready = st.session_state.file2_bytes is not None
 
 st.write("")
 
-# Process button sits narrow & centered directly under File 1's column;
-# Reset sits narrow & centered directly under File 2's column (only once processed).
 proc_col, reset_col = st.columns(2, gap="large")
 
 with proc_col:
     p_l, p_c, p_r = st.columns([1.4, 1, 1.4])
     with p_c:
         process_clicked = st.button(
-            "Process",
-            disabled=not (file1_ready and file2_ready),
+            "Process Data",
+            disabled=not (file1_ready & file2_ready),
             type="primary",
             use_container_width=True,
         )
     if not (file1_ready and file2_ready):
         st.markdown(
-            "<div style='text-align:center; font-size:0.82rem; color:#8a8aa3;'>"
-            "Upload both files to enable Process.</div>",
+            "<div style='text-align:center; font-size:0.82rem; color:#4b5563; font-weight: 500;'>Upload both statements to begin processing.</div>",
             unsafe_allow_html=True,
         )
 
@@ -1051,17 +1305,13 @@ with reset_col:
     if st.session_state.processed:
         r_l, r_c, r_r = st.columns([1.4, 1, 1.4])
         with r_c:
-            if st.button("↺ Reset", type="secondary", use_container_width=True):
+            if st.button("↺ Reset All", type="secondary", use_container_width=True):
                 reset_app()
                 st.rerun()
 
-# --------------------------------------------------------------------------
-# Process files -> load & clean them, then hand off to the mapping step
-# (auto-detection / reconciliation itself no longer happens automatically —
-# the user confirms or adjusts the mapping first, see the section below).
-# --------------------------------------------------------------------------
+# Processing Files Trigger
 if process_clicked and file1_ready and file2_ready:
-    with st.spinner("Reading files and detecting headers..."):
+    with st.spinner("Extracting spreadsheets and analyzing row headers..."):
         df1, err1 = load_dataframe(st.session_state.file1_bytes, st.session_state.file1_name)
         df2, err2 = load_dataframe(st.session_state.file2_bytes, st.session_state.file2_name)
 
@@ -1081,20 +1331,12 @@ if process_clicked and file1_ready and file2_ready:
     else:
         st.session_state.processed = False
 
-# --------------------------------------------------------------------------
-# Column mapping step
-# Shown once files are processed and before reconciliation has run.
-# One row per fixed field (Date, Amount, Description, Reference), one
-# dropdown column per uploaded file (headed with the actual file names),
-# each dropdown pre-filled with our best keyword-based guess.
-# --------------------------------------------------------------------------
-MAP_FIELD_ORDER = ["Date", "Amount", "Description", "Reference"]
-
+# Column Mapping Screen (COMPACT MODERATE DESIGN WITH ONLY AMOUNT AUTO-MAPPED)
 if (
-    st.session_state.processed
-    and st.session_state.df1 is not None
-    and st.session_state.df2 is not None
-    and not st.session_state.reconciled
+        st.session_state.processed
+        and st.session_state.df1 is not None
+        and st.session_state.df2 is not None
+        and not st.session_state.reconciled
 ):
     df1 = st.session_state.df1
     df2 = st.session_state.df2
@@ -1106,95 +1348,99 @@ if (
     options1 = [BLANK_OPTION] + cols1
     options2 = [BLANK_OPTION] + cols2
 
-    auto1 = auto_detect_mapping(cols1)
-    auto2 = auto_detect_mapping(cols2)
+    # Amount auto-detect
+    auto_amt1 = auto_detect_column(cols1, "Amount")
+    auto_amt2 = auto_detect_column(cols2, "Amount")
 
-    st.markdown('<div class="section-title">Map Columns</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Column Mapping Setup</div>', unsafe_allow_html=True)
     st.caption(
-        "Each dropdown is pre-filled with our best guess based on the file's own "
-        "headers — change any of them if it picked the wrong column. "
-        "**Date** and **Amount** are required for both files. "
-        "**Reference** and **Description** are optional, but if you use one, "
-        "it must be set on both files."
+        "Only the **Amount** column is mapped automatically. "
+        "All supporting columns default to unmapped unless selected."
     )
 
-    st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
-    hdr_l, hdr_1, hdr_2 = st.columns([1.2, 2, 2])
-    with hdr_l:
-        st.markdown('<div class="mapping-header">Field</div>', unsafe_allow_html=True)
-    with hdr_1:
-        st.markdown(f'<div class="mapping-header">{name1}</div>', unsafe_allow_html=True)
-    with hdr_2:
-        st.markdown(f'<div class="mapping-header">{name2}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Moderate Beautiful Card Wrapper
+    st.markdown('<div class="mapping-card">', unsafe_allow_html=True)
+
+    # Header Grid
+    g_hdr_lbl, g_hdr_1, g_hdr_2 = st.columns([1.2, 2, 2])
+    with g_hdr_lbl:
+        st.markdown('<div style="font-weight:800; color:#1e3a8a; font-size:1.05rem;">Field Name</div>',
+                    unsafe_allow_html=True)
+    with g_hdr_1:
+        st.markdown(f'<div style="font-weight:800; color:#1e3a8a; font-size:1.05rem;">{name1} Header</div>',
+                    unsafe_allow_html=True)
+    with g_hdr_2:
+        st.markdown(f'<div style="font-weight:800; color:#1e3a8a; font-size:1.05rem;">{name2} Header</div>',
+                    unsafe_allow_html=True)
+    st.markdown('<div style="margin-top:0.6rem; border-bottom:1px solid #e2e8f0; margin-bottom:0.8rem;"></div>',
+                unsafe_allow_html=True)
 
     selections1, selections2 = {}, {}
 
-    for field in MAP_FIELD_ORDER:
-        st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
-        lbl_col, sel1_col, sel2_col = st.columns([1.2, 2, 2])
-        with lbl_col:
-            st.markdown(f"**{field}**")
+    for field in FIXED_FIELDS:
+        g_lbl, g_sel1, g_sel2 = st.columns([1.2, 2, 2])
+        with g_lbl:
+            req_label = "*(Mandatory)*" if field == "Amount" else "(Optional)"
+            st.markdown(
+                f"<div style='padding-top:0.35rem; font-weight:600;'>{field} <span style='font-size:0.75rem; font-weight:normal; color:#4b5563;'>{req_label}</span></div>",
+                unsafe_allow_html=True)
 
-        default1 = auto1.get(field)
-        idx1 = options1.index(default1) if default1 in options1 else 0
-        with sel1_col:
+        if field == "Amount":
+            idx1 = options1.index(auto_amt1) if auto_amt1 in options1 else 0
+            idx2 = options2.index(auto_amt2) if auto_amt2 in options2 else 0
+        else:
+            # Strictly default to blank / — Select — (index 0)
+            idx1 = 0
+            idx2 = 0
+
+        with g_sel1:
             selections1[field] = st.selectbox(
-                field, options1, index=idx1, key=f"map1_{field}", label_visibility="collapsed"
+                f"sel1_{field}", options1, index=idx1, key=f"map1_{field}", label_visibility="collapsed"
             )
-
-        default2 = auto2.get(field)
-        idx2 = options2.index(default2) if default2 in options2 else 0
-        with sel2_col:
+        with g_sel2:
             selections2[field] = st.selectbox(
-                field, options2, index=idx2, key=f"map2_{field}", label_visibility="collapsed"
+                f"sel2_{field}", options2, index=idx2, key=f"map2_{field}", label_visibility="collapsed"
             )
-        st.markdown('</div>', unsafe_allow_html=True)
 
-    date_ok = selections1["Date"] != BLANK_OPTION and selections2["Date"] != BLANK_OPTION
-    amount_ok = selections1["Amount"] != BLANK_OPTION and selections2["Amount"] != BLANK_OPTION
+        # Render explicit mapping instructions below the Amount 2 field as requested
+        if field == "Amount 2":
+            st.markdown(
+                "<span style='font-size:0.78rem; color:#2563eb; font-weight:500; display:block; margin-top:-0.5rem; margin-bottom:0.5rem;'>"
+                "ℹ️ Select this column only if your payment and invoice is located in different columns"
+                "</span>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown('<div style="margin:0.4rem 0;"></div>', unsafe_allow_html=True)
 
-    def _paired_ok(field):
-        set1 = selections1[field] != BLANK_OPTION
-        set2 = selections2[field] != BLANK_OPTION
-        return set1 == set2  # both selected, or both left blank
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    reference_ok = _paired_ok("Reference")
-    description_ok = _paired_ok("Description")
-
-    can_run = date_ok and amount_ok and reference_ok and description_ok
-
-    mapping_warnings = []
-    if not date_ok:
-        mapping_warnings.append("select **Date** for both files")
-    if not amount_ok:
-        mapping_warnings.append("select **Amount** for both files")
-    if not reference_ok:
-        mapping_warnings.append("select **Reference** for both files, or leave it blank on both")
-    if not description_ok:
-        mapping_warnings.append("select **Description** for both files, or leave it blank on both")
+    # Let the app execute if either the main Amount or secondary Amount 2 are mapped on both sides
+    amount_ok = (
+            (selections1["Amount"] != BLANK_OPTION or selections1["Amount 2"] != BLANK_OPTION)
+            and (selections2["Amount"] != BLANK_OPTION or selections2["Amount 2"] != BLANK_OPTION)
+    )
+    can_run = amount_ok
 
     st.write("")
     run_l, run_c, run_r = st.columns([1.4, 1, 1.4])
     with run_c:
         run_clicked = st.button(
-            "Run Reconciliation",
+            "Execute Reconciliation",
             disabled=not can_run,
             type="primary",
             use_container_width=True,
         )
     if not can_run:
         st.markdown(
-            "<div style='text-align:center; font-size:0.82rem; color:#8a8aa3;'>"
-            + ("Please " + "; ".join(mapping_warnings) + "." if mapping_warnings else "")
-            + "</div>",
+            "<div style='text-align:center; font-size:0.85rem; color:#991b1b; font-weight:700;'>Please map the mandatory 'Amount' columns for both files to proceed.</div>",
             unsafe_allow_html=True,
         )
 
     if run_clicked and can_run:
         mapping1 = {f: (selections1[f] if selections1[f] != BLANK_OPTION else None) for f in FIXED_FIELDS}
         mapping2 = {f: (selections2[f] if selections2[f] != BLANK_OPTION else None) for f in FIXED_FIELDS}
-        with st.spinner("Running deterministic rule-based reconciliation..."):
+        with st.spinner("Analyzing rules & classifying balances..."):
             results = run_reconciliation(df1, df2, mapping1, mapping2)
             results["mapping1"] = mapping1
             results["mapping2"] = mapping2
@@ -1202,157 +1448,490 @@ if (
         st.session_state.reconciled = True
         st.rerun()
 
-# --------------------------------------------------------------------------
-# Reconciliation results
-# --------------------------------------------------------------------------
+# Displaying Report Screens
 if st.session_state.reconciled and st.session_state.recon_results is not None:
     R = st.session_state.recon_results
     name1 = st.session_state.file1_name
     name2 = st.session_state.file2_name
-    std1, std2 = R["std1"], R["std2"]
-    flags1, flags2 = R["flags1"], R["flags2"]
 
-    # Display-only copies with dates rendered in a single standardized format
-    std1_disp = std1.copy()
-    std2_disp = std2.copy()
-    if "Date" in std1_disp.columns:
-        std1_disp["Date"] = std1_disp["Date"].apply(format_date_display)
-    if "Date" in std2_disp.columns:
-        std2_disp["Date"] = std2_disp["Date"].apply(format_date_display)
+    # ---- 1. Zero-Based Ledger Internal Balance Checklist ----
+    st.markdown('<div class="section-title">📊 Zero-Based Internal Balance Check</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-title">Reconciliation Results</div>', unsafe_allow_html=True)
+    bal1, bal2, bal_diff = R["bal1"], R["bal2"], R["bal_diff"]
+    card_class = "balance-card-error" if abs(bal_diff) > 0.01 else "balance-card"
+    status_icon = "⚠️" if abs(bal_diff) > 0.01 else "✅"
 
-    n_full = len(R["full_matches"])
-    n_partial = len(R["partial_matches"])
-    n_split = len(R["splits"])
-    n_combined = len(R["combined"])
-    n_unmatched = len(R["unmatched1"]) + len(R["unmatched2"])
-    n_dupes = len(R["duplicates1"]) + len(R["duplicates2"])
+    balance_text = f"""
+    <div class="{card_class}">
+        <h4 style="margin-top:0; color:#1e293b;">{status_icon} Zero-Based Net Ledger Summary</h4>
+        <p style="margin: 0.5rem 0;">Calculated from absolute 0 based on your strict policy (Payments + Credit Notes + Adjustments - Invoices):</p>
+        <p style="margin: 0.2rem 0;"><b>{name1} Net Calculated Balance:</b> ${bal1:,.2f}</p>
+        <p style="margin: 0.2rem 0;"><b>{name2} Net Calculated Balance:</b> ${bal2:,.2f}</p>
+        <p style="margin: 0.5rem 0 0 0; font-size:1.05rem; font-weight:bold;">
+            Net Ledger Variance: <span style="color:{'#dc2626' if abs(bal_diff) > 0.01 else '#16a34a'};">${abs(bal_diff):,.2f}</span>
+        </p>
+    </div>
+    """
+    st.markdown(balance_text, unsafe_allow_html=True)
+
+    # Isolated Excluded Folder Report for completely unclassified rows
+    unclassified_rows = []
+    for u in R["unclassified1"]:
+        raw_t = u["raw_type"]
+        if is_blank_value(raw_t) or str(raw_t).strip() == "" or str(raw_t).strip().lower() in (
+        "nan", "none", "transection type is missing"):
+            raw_t_display = "Transection type is missing"
+            reason = "Missing transection type"
+        else:
+            raw_t_display = str(raw_t).strip()
+            reason = "Transection type not identified"
+
+        unclassified_rows.append({
+            "Source File": name1,
+            "Row": u["original_row_num"],
+            "Amount": clean_amount_display(u["amount"]),
+            "Transection Type": raw_t_display,
+            "Reason for Exclusion": reason,
+            "Description Context": clean_cell_text(u["orig_desc"]),
+            "Reference Context": clean_cell_text(u["orig_ref"])
+        })
+    for u in R["unclassified2"]:
+        raw_t = u["raw_type"]
+        if is_blank_value(raw_t) or str(raw_t).strip() == "" or str(raw_t).strip().lower() in (
+        "nan", "none", "transection type is missing"):
+            raw_t_display = "Transection type is missing"
+            reason = "Missing transection type"
+        else:
+            raw_t_display = str(raw_t).strip()
+            reason = "Transection type not identified"
+
+        unclassified_rows.append({
+            "Source File": name2,
+            "Row": u["original_row_num"],
+            "Amount": clean_amount_display(u["amount"]),
+            "Transection Type": raw_t_display,
+            "Reason for Exclusion": reason,
+            "Description Context": clean_cell_text(u["orig_desc"]),
+            "Reference Context": clean_cell_text(u["orig_ref"])
+        })
+
+    if unclassified_rows:
+        with st.expander("📋 Unclassified Transactions Excluded from Balance", expanded=False):
+            st.caption(
+                "The following transaction records didn't mention or match any target category keywords, so they were excluded from core background balance computations:")
+            st.dataframe(pd.DataFrame(unclassified_rows), use_container_width=True, hide_index=True)
+
+    # ---- 2. Initial Transaction Category Summary Dashboard ----
+    st.markdown('<div class="section-title">🔍 Initial Transaction Category Summary</div>', unsafe_allow_html=True)
+
+    categories_list = ["Invoice", "Payment", "Credit Note", "Adjustment", "Unknown"]
+    summary_data = []
+    payment_diff = R["totals1"]["Payment"] - R["totals2"]["Payment"]
+    invoice_diff = R["totals1"]["Invoice"] - R["totals2"]["Invoice"]
+
+    for cat in categories_list:
+        total1 = R["totals1"][cat]
+        cnt1 = R["counts1"][cat]
+        total2 = R["totals2"][cat]
+        cnt2 = R["counts2"][cat]
+        diff_val = total1 - total2
+        clean_cat_lbl = "Unclassified" if cat == "Unknown" else cat
+
+        summary_data.append({
+            "Transaction Category": clean_cat_lbl,
+            f"{name1} Count": cnt1,
+            f"{name1} Total Amount": f"${total1:,.2f}",
+            f"{name2} Count": cnt2,
+            f"{name2} Total Amount": f"${total2:,.2f}",
+            "Absolute Difference": f"${abs(diff_val):,.2f}",
+            "Status Variance": f"Perfect Align" if abs(diff_val) <= 0.01 else (
+                f"${abs(diff_val):,.2f} missing on {name2}" if diff_val > 0 else f"${abs(diff_val):,.2f} missing on {name1}")
+        })
+
+    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+
+    # Immediate Alert notifications
+    alerts = []
+    if abs(invoice_diff) > 0.01:
+        missing_sheet = name2 if invoice_diff > 0 else name1
+        alerts.append(f"📌 **Invoice Difference**: ${abs(invoice_diff):,.2f} missing from {missing_sheet}")
+    if abs(payment_diff) > 0.01:
+        missing_sheet = name2 if payment_diff > 0 else name1
+        alerts.append(f"📌 **Payment Difference**: ${abs(payment_diff):,.2f} missing from {missing_sheet}")
+
+    if alerts:
+        with st.expander("🚨 Immediate Discrepancies Detected", expanded=True):
+            for alert in alerts:
+                st.markdown(alert)
+
+    # Extract One-to-Many and Many-to-One Matches out separately
+    one_to_many_matches = [m for m in R["advanced_matches"] if "row1" in m]
+    many_to_one_matches = [m for m in R["advanced_matches"] if "row2" in m]
+
+    # Summary Badges
+    st.write("")
+    n_direct = len(R["inter_matches"])
+    n_one_to_many = len(one_to_many_matches)
+    n_many_to_one = len(many_to_one_matches)
+    n_intra = len(R["intra1"]) + len(R["intra2"])
+    n_exceptions = len(R["exceptions1"]) + len(R["exceptions2"])
+    n_dupes = len(R["dupes1"]) + len(R["dupes2"])
 
     s1, s2, s3, s4, s5, s6 = st.columns(6)
     for col, num, lbl in [
-        (s1, n_full, "Fully Matched"),
-        (s2, n_partial, "Partially Matched"),
-        (s3, n_split, "Split Payments"),
-        (s4, n_combined, "Combined Payments"),
-        (s5, n_unmatched, "Exceptions"),
+        (s1, n_direct, "Cross-Sheet Matched"),
+        (s2, n_one_to_many, "One-to-Many Sum Matched"),
+        (s3, n_many_to_one, "Many-to-One Sum Matched"),
+        (s4, n_intra, "Intra-Sheet Offsets"),
+        (s5, n_exceptions, "Exceptions Unmatched"),
         (s6, n_dupes, "Possible Duplicates"),
     ]:
         with col:
             st.markdown(
-                f'<div class="recon-summary-card"><div class="num">{num}</div>'
-                f'<div class="lbl">{lbl}</div></div>',
+                f'<div class="recon-summary-card"><div class="num">{num}</div><div class="lbl">{lbl}</div></div>',
                 unsafe_allow_html=True,
             )
 
     st.write("")
 
-    def display_cols(std, flags):
-        return [f for f in FIXED_FIELDS if flags.get(f)]
+    # Establish precise dynamic mapping flags (Show optional properties ONLY if mapped in both)
+    show_date = R["mapping1"].get("Date") is not None and R["mapping2"].get("Date") is not None
+    show_ref = R["mapping1"].get("Reference") is not None and R["mapping2"].get("Reference") is not None
+    show_desc = R["mapping1"].get("Description") is not None and R["mapping2"].get("Description") is not None
 
-    disp1_cols = display_cols(std1, flags1)
-    disp2_cols = display_cols(std2, flags2)
+    # ---- 3. Standard Cross-Sheet Matched Transactions (Direct and Cross-Type) ----
+    st.markdown('<div class="section-title">✅ Genuine Cross-Sheet Matched Transactions</div>', unsafe_allow_html=True)
+    st.caption(
+        "Matches containing direct categorizations or adjustments that matched directly across statement files. Every matched row is guaranteed to have amount and row values for both statements.")
 
-    # ---- Fully matched ----
-    st.markdown("#### <span class='badge-full'>Fully Matched</span>", unsafe_allow_html=True)
-    if n_full:
-        rows = []
-        for m in R["full_matches"]:
-            i, j = m["i"], m["j"]
-            row = {f"{name1} Row": i + 1, f"{name2} Row": j + 1, "Score": m["score"]}
-            for f in disp1_cols:
-                row[f"{name1}: {f}"] = std1_disp.iloc[i][f]
-            for f in disp2_cols:
-                row[f"{name2}: {f}"] = std2_disp.iloc[j][f]
-            row["Match Basis"] = "; ".join(m["parts"])
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.caption("No fully matched transactions found.")
+    if n_direct:
+        matched_rows = []
 
-    # ---- Partially matched ----
-    st.markdown("#### <span class='badge-partial'>Partially Matched — Needs Review</span>", unsafe_allow_html=True)
-    if n_partial:
-        rows = []
-        for m in R["partial_matches"]:
-            i, j = m["i"], m["j"]
-            row = {f"{name1} Row": i + 1, f"{name2} Row": j + 1, "Score": m["score"]}
-            for f in disp1_cols:
-                row[f"{name1}: {f}"] = std1_disp.iloc[i][f]
-            for f in disp2_cols:
-                row[f"{name2}: {f}"] = std2_disp.iloc[j][f]
-            row["Match Basis"] = "; ".join(m["parts"])
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.caption("No partial matches found.")
+        for m in R["inter_matches"]:
+            r1 = m["row1"]
+            r2 = m["row2"]
 
-    # ---- Split payments (one-to-many) ----
-    st.markdown("#### <span class='badge-split'>Split Payments (1 → many)</span>", unsafe_allow_html=True)
-    if n_split:
-        rows = []
-        for s in R["splits"]:
-            row = {
-                f"{name1} Row": s["i"] + 1,
-                f"{name1} Amount": std1.iloc[s["i"]].get("Amount"),
-                f"{name2} Rows": ", ".join(str(j + 1) for j in s["js"]),
-                f"{name2} Sum": round(s["sum"], 2),
+            matched_props = ["Amount"]
+            unmatched_props = []
+
+            if show_date:
+                if pd.notna(r1["date"]) and pd.notna(r2["date"]):
+                    days = abs((r1["date"] - r2["date"]).days)
+                    if days == 0:
+                        matched_props.append("Date")
+                    else:
+                        unmatched_props.append(f"Date ({days} days diff)")
+                else:
+                    unmatched_props.append("Date blank in record")
+
+            if show_ref:
+                ref1 = clean_cell_text(r1["reference"])
+                ref2 = clean_cell_text(r2["reference"])
+                if ref1 and ref2:
+                    if ref1 == ref2:
+                        matched_props.append("Reference")
+                    else:
+                        unmatched_props.append("Reference mismatch")
+                else:
+                    unmatched_props.append("Reference blank in record")
+
+            status_str = "Matched: " + ", ".join(matched_props)
+            if unmatched_props:
+                status_str += " | Unmatched: " + ", ".join(unmatched_props)
+
+            # Precise dynamic key matching [Filename]: [Value]
+            row_dict = {
+                f"{name1}: Row": r1["original_row_num"],
+                f"{name2}: Row": r2["original_row_num"],
+                f"{name1}: Transaction Type": "" if r1["category"] == "Unknown" else r1["category"],
+                f"{name2}: Transaction Type": "" if r2["category"] == "Unknown" else r2["category"],
+                f"{name1}: Amount": clean_amount_display(r1["amount"]),
+                f"{name2}: Amount": clean_amount_display(r2["amount"]),
             }
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
-        st.caption("No split payments detected.")
+            if show_date:
+                row_dict[f"{name1}: Date"] = format_date_display(r1["date"])
+                row_dict[f"{name2}: Date"] = format_date_display(r2["date"])
+            if show_ref:
+                row_dict[f"{name1}: Reference"] = ref1
+                row_dict[f"{name2}: Reference"] = ref2
+            if show_desc:
+                row_dict[f"{name1}: Description"] = clean_cell_text(r1["description"])
+                row_dict[f"{name2}: Description"] = clean_cell_text(r2["description"])
 
-    # ---- Combined payments (many-to-one) ----
-    st.markdown("#### <span class='badge-split'>Combined Payments (many → 1)</span>", unsafe_allow_html=True)
-    if n_combined:
-        rows = []
-        for c in R["combined"]:
-            row = {
-                f"{name2} Row": c["j"] + 1,
-                f"{name2} Amount": std2.iloc[c["j"]].get("Amount"),
-                f"{name1} Rows": ", ".join(str(i + 1) for i in c["is"]),
-                f"{name1} Sum": round(c["sum"], 2),
+            row_dict["Match Type"] = m["type"]
+            row_dict["Match Score"] = m["score"]
+            row_dict["Match Status"] = status_str
+
+            matched_rows.append(row_dict)
+
+
+        # Payment Matching Prioritization Sort
+        def get_match_priority_key(row):
+            t1 = str(row.get(f"{name1}: Transaction Type", "")).upper()
+            t2 = str(row.get(f"{name2}: Transaction Type", "")).upper()
+            mtype = str(row.get("Match Type", "")).upper()
+            mstatus = str(row.get("Match Status", "")).upper()
+
+            if "PAYMENT" in t1 and "PAYMENT" in t2:
+                return 0
+            elif "PAYMENT" in t1 or "PAYMENT" in t2 or "PAYMENT" in mtype or "PAYMENT" in mstatus:
+                return 1
+            return 2
+
+
+        matched_rows.sort(key=get_match_priority_key)
+
+        matched_df = pd.DataFrame(matched_rows)
+        matched_df = clean_dataframe_strings(matched_df)
+        st.dataframe(matched_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No cross-statement matches identified.")
+
+    # ---- 4. Separate Table for Intra-Sheet Self-Offsets ----
+    st.markdown('<div class="section-title">🔄 Intra-Sheet Self-Offsets (Internal Adjustments)</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        "Self-offsetting transaction entries matched entirely within a single statement file (e.g. Invoices offset internally by Adjustments, or Payments offset by Credit Notes). Since these reconciled internally, they do not require an opposite file amount row.")
+
+    if n_intra:
+        intra_rows = []
+        for m in R["intra1"]:
+            cat_a = m['row_a']['category'] if m['row_a']['category'] != 'Unknown' else 'Unclassified'
+            cat_b = m['row_b']['category'] if m['row_b']['category'] != 'Unknown' else 'Unclassified'
+            row_dict = {
+                "Statement File": name1,
+                "Offset Rows": f"Row {m['row_a']['original_row_num']} & Row {m['row_b']['original_row_num']}",
+                "Amount": clean_amount_display(m["amount"]),
+                "Reconciled Category Types": f"{cat_a} vs {cat_b}",
+                "Reconciliation Basis": m["type"],
+                "Reconciliation Status": "Matched Internally within File"
             }
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            if show_date:
+                row_dict[
+                    "Dates"] = f"{format_date_display(m['row_a']['date'])}, {format_date_display(m['row_b']['date'])}".strip(
+                    ", —")
+            if show_ref:
+                row_dict[
+                    "References"] = f"{clean_cell_text(m['row_a']['reference'])}, {clean_cell_text(m['row_b']['reference'])}".strip(
+                    ", ")
+            intra_rows.append(row_dict)
+
+        for m in R["intra2"]:
+            cat_a = m['row_a']['category'] if m['row_a']['category'] != 'Unknown' else 'Unclassified'
+            cat_b = m['row_b']['category'] if m['row_b']['category'] != 'Unknown' else 'Unclassified'
+            row_dict = {
+                "Statement File": name2,
+                "Offset Rows": f"Row {m['row_a']['original_row_num']} & Row {m['row_b']['original_row_num']}",
+                "Amount": clean_amount_display(m["amount"]),
+                "Reconciled Category Types": f"{cat_a} vs {cat_b}",
+                "Reconciliation Basis": m["type"],
+                "Reconciliation Status": "Matched Internally within File"
+            }
+            if show_date:
+                row_dict[
+                    "Dates"] = f"{format_date_display(m['row_a']['date'])}, {format_date_display(m['row_b']['date'])}".strip(
+                    ", —")
+            if show_ref:
+                row_dict[
+                    "References"] = f"{clean_cell_text(m['row_a']['reference'])}, {clean_cell_text(m['row_b']['reference'])}".strip(
+                    ", ")
+            intra_rows.append(row_dict)
+
+        intra_df = pd.DataFrame(intra_rows)
+        intra_df = clean_dataframe_strings(intra_df)
+        st.dataframe(intra_df, use_container_width=True, hide_index=True)
     else:
-        st.caption("No combined payments detected.")
+        st.caption("No intra-sheet self-offset entries identified.")
 
-    # ---- Unmatched / exceptions ----
-    st.markdown("#### <span class='badge-unmatched'>Unmatched — Exceptions</span>", unsafe_allow_html=True)
-    exc_c1, exc_c2 = st.columns(2)
-    with exc_c1:
-        st.caption(f"**{name1}** ({len(R['unmatched1'])} unmatched)")
-        if R["unmatched1"]:
-            st.dataframe(std1_disp.iloc[R["unmatched1"]][disp1_cols], use_container_width=True, hide_index=True)
-        else:
-            st.caption("None — every row matched.")
-    with exc_c2:
-        st.caption(f"**{name2}** ({len(R['unmatched2'])} unmatched)")
-        if R["unmatched2"]:
-            st.dataframe(std2_disp.iloc[R["unmatched2"]][disp2_cols], use_container_width=True, hide_index=True)
-        else:
-            st.caption("None — every row matched.")
+    # ---- 5. One-to-Many Ledger Reconciliation ----
+    st.markdown('<div class="section-title">🥞 Split Payments (One-to-Many Ledger Reconciliation)</div>',
+                unsafe_allow_html=True)
+    st.caption(f"One single transaction from {name1} matched against the combined sum of multiple records in {name2}.")
 
-    # ---- Duplicates ----
-    st.markdown("#### 🔁 Possible Duplicate Entries")
-    dup1_disp = R["duplicates1"].copy()
-    dup2_disp = R["duplicates2"].copy()
-    if "Date" in dup1_disp.columns:
-        dup1_disp["Date"] = dup1_disp["Date"].apply(format_date_display)
-    if "Date" in dup2_disp.columns:
-        dup2_disp["Date"] = dup2_disp["Date"].apply(format_date_display)
-    dup_c1, dup_c2 = st.columns(2)
-    with dup_c1:
-        st.caption(f"**{name1}**")
-        if not dup1_disp.empty:
-            st.dataframe(dup1_disp, use_container_width=True, hide_index=True)
-        else:
-            st.caption("No duplicates detected.")
-    with dup_c2:
-        st.caption(f"**{name2}**")
-        if not dup2_disp.empty:
-            st.dataframe(dup2_disp, use_container_width=True, hide_index=True)
-        else:
-            st.caption("No duplicates detected.")
+    if n_one_to_many:
+        otm_rows = []
+        for m in one_to_many_matches:
+            r1 = m["row1"]
+            rows2 = m["rows2"]
+            r2_idxs = ", ".join(str(r["original_row_num"]) for r in rows2)
+            r2_types = ", ".join(r["category"] for r in rows2 if r["category"] != "Unknown")
+            r2_refs = ", ".join(clean_cell_text(r["reference"]) for r in rows2 if clean_cell_text(r["reference"]))
+            r2_amts = sum(r["amount"] for r in rows2)
+            r2_dates = ", ".join(format_date_display(r["date"]) for r in rows2 if pd.notna(r["date"]))
+            r2_descs = ", ".join(clean_cell_text(r["description"]) for r in rows2 if clean_cell_text(r["description"]))
+
+            row_dict = {
+                f"{name1}: Row": r1["original_row_num"],
+                f"{name2}: Row(s)": r2_idxs,
+                f"{name1}: Transaction Type": "" if r1["category"] == "Unknown" else r1["category"],
+                f"{name2}: Transaction Type(s)": r2_types,
+                f"{name1}: Amount": clean_amount_display(r1["amount"]),
+                f"{name2}: Amount (Sum)": clean_amount_display(r2_amts),
+            }
+            if show_date:
+                row_dict[f"{name1}: Date"] = format_date_display(r1["date"])
+                row_dict[f"{name2}: Date(s)"] = r2_dates
+            if show_ref:
+                row_dict[f"{name1}: Reference"] = clean_cell_text(r1["reference"])
+                row_dict[f"{name2}: Reference(s)"] = r2_refs
+            if show_desc:
+                row_dict[f"{name1}: Description"] = clean_cell_text(r1["description"])
+                row_dict[f"{name2}: Description(s)"] = r2_descs
+
+            row_dict["Match Type"] = m["type"]
+            row_dict["Match Score"] = m["score"]
+            row_dict["Match Status"] = "Matched: Amount (Sum) | Individual references or dates differ across items"
+            otm_rows.append(row_dict)
+
+        otm_df = pd.DataFrame(otm_rows)
+        otm_df = clean_dataframe_strings(otm_df)
+        st.dataframe(otm_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No One-to-Many matches identified.")
+
+    # ---- 6. Many-to-One Ledger Reconciliation ----
+    st.markdown('<div class="section-title">🥞 Combined Payments (Many-to-One Ledger Reconciliation)</div>',
+                unsafe_allow_html=True)
+    st.caption(f"Multiple transactions from {name1} combined together to match against a single entry in {name2}.")
+
+    if n_many_to_one:
+        mto_rows = []
+        for m in many_to_one_matches:
+            r2 = m["row2"]
+            rows1 = m["rows1"]
+            r1_idxs = ", ".join(str(r["original_row_num"]) for r in rows1)
+            r1_types = ", ".join(r["category"] for r in rows1 if r["category"] != "Unknown")
+            r1_refs = ", ".join(clean_cell_text(r["reference"]) for r in rows1 if clean_cell_text(r["reference"]))
+            r1_amts = sum(r["amount"] for r in rows1)
+            r1_dates = ", ".join(format_date_display(r["date"]) for r in rows1 if pd.notna(r["date"]))
+            r1_descs = ", ".join(clean_cell_text(r["description"]) for r in rows1 if clean_cell_text(r["description"]))
+
+            row_dict = {
+                f"{name1}: Row(s)": r1_idxs,
+                f"{name2}: Row": r2["original_row_num"],
+                f"{name1}: Transaction Type(s)": r1_types,
+                f"{name2}: Transaction Type": "" if r2["category"] == "Unknown" else r2["category"],
+                f"{name1}: Amount (Sum)": clean_amount_display(r1_amts),
+                f"{name2}: Amount": clean_amount_display(r2["amount"]),
+            }
+            if show_date:
+                row_dict[f"{name1}: Date(s)"] = r1_dates
+                row_dict[f"{name2}: Date"] = format_date_display(r2["date"])
+            if show_ref:
+                row_dict[f"{name1}: Reference(s)"] = r1_refs
+                row_dict[f"{name2}: Reference"] = clean_cell_text(r2["reference"])
+            if show_desc:
+                row_dict[f"{name1}: Description(s)"] = r1_descs
+                row_dict[f"{name2}: Description"] = clean_cell_text(r2["description"])
+
+            row_dict["Match Type"] = m["type"]
+            row_dict["Match Score"] = m["score"]
+            row_dict["Match Status"] = "Matched: Amount (Sum) | Individual references or dates differ across items"
+            mto_rows.append(row_dict)
+
+        mto_df = pd.DataFrame(mto_rows)
+        mto_df = clean_dataframe_strings(mto_df)
+        st.dataframe(mto_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No Many-to-One matches identified.")
+
+    # ---- 7. Potential Duplicate Entries Table ----
+    st.markdown('<div class="section-title">🔁 Potential Duplicate Entries</div>', unsafe_allow_html=True)
+    st.caption(
+        "Transactions inside a single sheet with identical key attributes (identical amounts, dates, and descriptions) sorted side-by-side for comparison.")
+
+    dup_rows = []
+    for dup in R["dupes1"]:
+        dup_rows.append({
+            "Source Statement": name1,
+            "Row": dup["original_row_num"],
+            "Amount": clean_cell_text(dup["orig_amount"]) if dup["orig_amount"] else "—",
+            "Date": dup["orig_date"] if dup["orig_date"] else "—",
+            "Description": dup["orig_desc"] if dup["orig_desc"] else "—",
+            "Reference": clean_cell_text(dup["orig_ref"]) if show_ref else "—",
+            "Category Type": "" if dup["category"] == "Unknown" else dup["category"],
+            "Duplicate Category": dup["exception_type"],
+            # Strict sort helpers matching identical criteria
+            "_sort_amount": dup["amount"],
+            "_sort_date": dup["check_date"],
+            "_sort_desc": dup["check_description"].lower().strip()
+        })
+
+    for dup in R["dupes2"]:
+        dup_rows.append({
+            "Source Statement": name2,
+            "Row": dup["original_row_num"],
+            "Amount": clean_cell_text(dup["orig_amount"]) if dup["orig_amount"] else "—",
+            "Date": dup["orig_date"] if dup["orig_date"] else "—",
+            "Description": dup["orig_desc"] if dup["orig_desc"] else "—",
+            "Reference": clean_cell_text(dup["orig_ref"]) if show_ref else "—",
+            "Category Type": "" if dup["category"] == "Unknown" else dup["category"],
+            "Duplicate Category": dup["exception_type"],
+            # Strict sort helpers matching identical criteria
+            "_sort_amount": dup["amount"],
+            "_sort_date": dup["check_date"],
+            "_sort_desc": dup["check_description"].lower().strip()
+        })
+
+    if dup_rows:
+        dup_df = pd.DataFrame(dup_rows)
+        # Sort sequentially so matched duplicates are perfectly adjacent
+        dup_df = dup_df.sort_values(by=["_sort_amount", "_sort_date", "_sort_desc", "Source Statement"],
+                                    ascending=[True, True, True, True])
+        dup_df = dup_df.drop(columns=["_sort_amount", "_sort_date", "_sort_desc"])
+        dup_df = clean_dataframe_strings(dup_df)
+        st.dataframe(dup_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No duplicate values detected within either statement.")
+
+    # ---- 8. Exceptions Report ----
+    st.markdown('<div class="section-title">⚠️ Exceptions & Unmatched Report</div>', unsafe_allow_html=True)
+    st.caption(
+        "Transactions that failed to match on amounts, are completely omitted from statements, or have no defined amounts.")
+
+    unmatched_rows = []
+
+    for exc in R["exceptions1"]:
+        row_dict = {
+            "Source Statement": name1,
+            "Row": exc["original_row_num"],
+            "Amount": clean_cell_text(exc["orig_amount"]) if exc["orig_amount"] else "—",
+        }
+        if show_date:
+            row_dict["Date"] = clean_cell_text(exc["orig_date"]) if exc["orig_date"] else "—"
+        if show_ref:
+            row_dict["Reference"] = clean_cell_text(exc["orig_ref"]) if exc["orig_ref"] else "—"
+        row_dict.update({
+            "Category Type": "" if exc["category"] == "Unknown" else exc["category"],
+            "Description Context": clean_cell_text(exc["orig_desc"]) if exc["orig_desc"] else "—",
+            "Exception Category": exc["exception_type"]
+        })
+        unmatched_rows.append(row_dict)
+
+    for exc in R["exceptions2"]:
+        row_dict = {
+            "Source Statement": name2,
+            "Row": exc["original_row_num"],
+            "Amount": clean_cell_text(exc["orig_amount"]) if exc["orig_amount"] else "—",
+        }
+        if show_date:
+            row_dict["Date"] = clean_cell_text(exc["orig_date"]) if exc["orig_date"] else "—"
+        if show_ref:
+            row_dict["Reference"] = clean_cell_text(exc["orig_ref"]) if exc["orig_ref"] else "—"
+        row_dict.update({
+            "Category Type": "" if exc["category"] == "Unknown" else exc["category"],
+            "Description Context": clean_cell_text(exc["orig_desc"]) if exc["orig_desc"] else "—",
+            "Exception Category": exc["exception_type"]
+        })
+        unmatched_rows.append(row_dict)
+
+    if unmatched_rows:
+        exceptions_df = pd.DataFrame(unmatched_rows)
+        # Create helper numeric sorting column to arrange exceptions alphabetically or numerically
+        exceptions_df["_sort_amount"] = exceptions_df["Amount"].apply(lambda x: parse_amount(x))
+        exceptions_df = exceptions_df.sort_values(by=["_sort_amount", "Source Statement"], ascending=[True, True])
+        exceptions_df = exceptions_df.drop(columns=["_sort_amount"])
+        exceptions_df = clean_dataframe_strings(exceptions_df)
+        st.dataframe(exceptions_df, use_container_width=True, hide_index=True)
+    else:
+        st.success("Perfect reconciliation! All entries have successfully matched.")
