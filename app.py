@@ -18,7 +18,7 @@ st.set_page_config(
 
 ALLOWED_EXTENSIONS = {"csv", "xlsx", "xls", "pdf"}
 FIXED_FIELDS = ["Amount", "Amount 2", "Date", "Reference", "Description"]
-BLANK_OPTION = "— Select —"
+BLANK_OPTION = "Select"
 
 # ==========================================================================
 # BLOCK 2: SESSION STATE INITIALIZATION & RESET UTILITIES
