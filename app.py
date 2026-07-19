@@ -1801,7 +1801,7 @@ with proc_col:
             excel_data_bytes = st.session_state.recon_results.get("excel_bytes", b"")
             if excel_data_bytes:
                 st.download_button(
-                    label="📥 Download as Excel",
+                    label="Download as Excel",
                     data=excel_data_bytes,
                     file_name="Financial_Reconciliation_Report.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1968,7 +1968,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     name2 = st.session_state.file2_name
 
     # ---- 1. Zero-Based Ledger Internal Balance Checklist ----
-    st.markdown('<div class="section-title">📊 Zero-Based Internal Balance Check</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Zero-Based Internal Balance Check</div>', unsafe_allow_html=True)
 
     bal1, bal2, bal_diff = R["bal1"], R["bal2"], R["bal_diff"]
     card_class = "balance-card-error" if abs(bal_diff) > 0.01 else "balance-card"
@@ -2029,7 +2029,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         })
 
     if unclassified_rows:
-        with st.expander("📋 Unclassified Transactions Excluded from Balance", expanded=False):
+        with st.expander("Unclassified Transactions Excluded from Balance", expanded=False):
             st.caption(
                 "The following transaction records didn't mention or match any target category keywords, so they were excluded from core background balance computations:")
             st.dataframe(pd.DataFrame(unclassified_rows), use_container_width=True, hide_index=True)
@@ -2075,7 +2075,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         alerts.append(f"📌 **Payment Difference**: ${abs(payment_diff):,.2f} missing from {missing_sheet}")
 
     if alerts:
-        with st.expander("🚨 Immediate Discrepancies Detected", expanded=True):
+        with st.expander("Immediate Discrepancies Detected", expanded=True):
             for alert in alerts:
                 st.markdown(alert)
 
@@ -2084,7 +2084,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     many_to_one_matches = [m for m in R["advanced_matches"] if "row2" in m]
 
     # ---- 3. Reconciliation Results Table Layout ----
-    st.markdown('<div class="section-title">📊 Reconciliation Results</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Reconciliation Results</div>', unsafe_allow_html=True)
 
     n_direct = len(R["inter_matches"])
     n_one_to_many = len(one_to_many_matches)
@@ -2140,7 +2140,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     show_desc = R["mapping1"].get("Description") is not None and R["mapping2"].get("Description") is not None
 
     # ---- 4. Standard Cross-Sheet Matched Transactions (Direct and Cross-Type) ----
-    st.markdown('<div class="section-title">✅ Genuine Cross-Sheet Matched Transactions</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Genuine Cross-Sheet Matched Transactions</div>', unsafe_allow_html=True)
     st.caption(
         "Matches containing direct categorizations or adjustments that matched directly across statement files. Every matched row is guaranteed to have amount and row values for both statements.")
 
@@ -2228,7 +2228,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         st.info("No cross-statement matches identified.")
 
     # ---- 4. Separate Table for Intra-Sheet Self-Offsets ----
-    st.markdown('<div class="section-title">🔄 Intra-Sheet Self-Offsets (Internal Adjustments)</div>',
+    st.markdown('<div class="section-title">Intra-Sheet Self-Offsets (Internal Adjustments)</div>',
                 unsafe_allow_html=True)
     st.caption(
         "Self-offsetting transaction entries matched entirely within a single statement file (e.g. Invoices offset internally by Adjustments, or Payments offset by Credit Notes). Since these reconciled internally, they do not require an opposite file amount row.")
@@ -2284,7 +2284,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         st.caption("No intra-sheet self-offset entries identified.")
 
     # ---- 5. One-to-Many Ledger Reconciliation ----
-    st.markdown('<div class="section-title">🥞 Split Payments (One-to-Many Ledger Reconciliation)</div>',
+    st.markdown('<div class="section-title">Split Payments (One-to-Many Ledger Reconciliation)</div>',
                 unsafe_allow_html=True)
     st.caption(f"One single transaction from {name1} matched against the combined sum of multiple records in {name2}.")
 
@@ -2330,7 +2330,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         st.caption("No One-to-Many matches identified.")
 
     # ---- 6. Many-to-One Ledger Reconciliation ----
-    st.markdown('<div class="section-title">🥞 Combined Payments (Many-to-One Ledger Reconciliation)</div>',
+    st.markdown('<div class="section-title">Combined Payments (Many-to-One Ledger Reconciliation)</div>',
                 unsafe_allow_html=True)
     st.caption(f"Multiple transactions from {name1} combined together to match against a single entry in {name2}.")
 
@@ -2376,7 +2376,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         st.caption("No Many-to-One matches identified.")
 
     # ---- 7. Potential Duplicate Entries Table ----
-    st.markdown('<div class="section-title">🔁 Potential Duplicate Entries</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Potential Duplicate Entries</div>', unsafe_allow_html=True)
     st.caption(
         "Transactions inside a single sheet with identical key attributes (identical amounts, dates, and descriptions) sorted side-by-side for comparison.")
 
@@ -2426,7 +2426,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
 
     # ---- 7.5 EXCEPTION SUMMARY REPORT (NEW) ----
     if n_exceptions:
-        st.markdown('<div class="section-title">📋 Exception Summary</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Exception Summary</div>', unsafe_allow_html=True)
         st.caption("A high-level count of records missing across your comparison.")
 
         exc_summary = {
@@ -2455,7 +2455,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
         st.dataframe(exc_summary_df, use_container_width=True, hide_index=True)
 
     # ---- 8. Exceptions Report (Updated with Source Context) ----
-    st.markdown('<div class="section-title">⚠️ Exceptions & Unmatched Report</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Exceptions & Unmatched Report</div>', unsafe_allow_html=True)
     st.caption(
         "Transactions that failed to match on amounts, are completely omitted from statements, or have no defined amounts.")
 
