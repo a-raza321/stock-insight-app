@@ -18,7 +18,7 @@ st.set_page_config(
 
 ALLOWED_EXTENSIONS = {"csv", "xlsx", "xls", "pdf"}
 FIXED_FIELDS = ["Amount", "Amount 2", "Date", "Reference", "Description"]
-BLANK_OPTION = "Select"
+BLANK_OPTION = "— Select —"
 
 # ==========================================================================
 # BLOCK 2: SESSION STATE INITIALIZATION & RESET UTILITIES
@@ -246,6 +246,27 @@ st.markdown(
     }
     div[data-testid="stButton"] button[kind="secondary"]:hover {
         background: #fef2f2;
+    }
+    /* High-contrast styling for the Download as Excel button to fix black-on-black visibility */
+    div[data-testid="stDownloadButton"] button {
+        background-color: #10b981 !important; /* Emerald green background */
+        color: #ffffff !important;            /* Pure white text */
+        border-radius: 12px !important;
+        font-weight: 700 !important;
+        font-size: 1.0rem !important;
+        border: none !important;
+        box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3) !important;
+        transition: transform 0.15s ease, background-color 0.15s ease !important;
+        padding: 0.6rem 0 !important;
+        display: inline-flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
+    }
+    div[data-testid="stDownloadButton"] button:hover {
+        background-color: #059669 !important; /* Richer forest green on hover */
+        color: #ffffff !important;            /* Keeps text white */
+        transform: translateY(-2px) !important;
     }
     /* Modern Column Mapping Layout */
     .mapping-card {
@@ -485,11 +506,14 @@ KEYWORDS_MAP = {
     "eft": "Payment",
     "csh": "Payment",
 
-    # CREDIT NOTE
+    # CREDIT NOTE (Including CRE and Credit Memo matching)
     "credit note": "Credit Note",
     "credit_note": "Credit Note",
     "correction": "Credit Note",
     "crn": "Credit Note",
+    "cre": "Credit Note",
+    "credit memo": "Credit Note",
+    "credit_memo": "Credit Note",
 
     # ADJUSTMENT
     "adjustment": "Adjustment",
@@ -558,7 +582,7 @@ def clean_dataframe_strings(df):
         if pd.api.types.is_numeric_dtype(df[col]):
             continue
         df[col] = df[col].apply(lambda x: "" if pd.isna(x) or str(x).lower().strip() in (
-        "nan", "n/a", "none", "unknown", "—", "-") else str(x))
+            "nan", "n/a", "none", "unknown", "—", "-") else str(x))
     return df
 
 
@@ -818,6 +842,21 @@ def build_standard_rows(df, mapping):
             is_amt_blank = blank2
 
         amt = parse_amount(final_raw_amt) if final_raw_amt is not None else 0.0
+
+        # CRITICAL FILTER: Ignore non-blank mapped values strictly less than 1.0 (such as 0.9, 0.8, etc.)
+        # Blank amounts are kept so they can be flagged cleanly as "Amount not available" downstream.
+        if not is_amt_blank and amt < 1.0:
+            continue
+
+        # SKIP LOGIC: If transaction type is Payment and its parsed amount is 0.0 or the column is empty, skip entirely!
+        if cat == "Payment":
+            if amt == 0.0:
+                continue
+            if amount2_col and blank2:
+                continue
+            elif not amount2_col and blank1:
+                continue
+
         dt = dates_series.iloc[idx] if date_col else pd.NaT
         ref = str(raw_row.get(ref_col)).strip() if ref_col and pd.notna(raw_row.get(ref_col)) else ""
         desc = str(raw_row.get(desc_col)).strip() if desc_col and pd.notna(raw_row.get(desc_col)) else ""
@@ -918,7 +957,7 @@ def score_pair(a, b, show_date, show_ref):
 # ==========================================================================
 # BLOCK 7: MULTI-PASS RECONCILIATION ENGINE
 # ==========================================================================
-def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
+def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2, name1, name2):
     """
     Performs comprehensive intra-sheet offset mapping, cross-sheet direct matching,
     combinatorial sum grouping (1-to-Many, Many-to-1), and error classification.
@@ -962,17 +1001,13 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
 
     # ---- PASS 0: Internal self-offsets inside Sheet 1 ----
     for i in range(len(rows1)):
-        if i in intra_used1:
+        if i in intra_used1 or rows1[i].get("is_blank_amount", False):
             continue
         r1_a = rows1[i]
-        if r1_a.get("is_blank_amount", False):
-            continue
         for j in range(i + 1, len(rows1)):
-            if j in intra_used1:
+            if j in intra_used1 or rows1[j].get("is_blank_amount", False):
                 continue
             r1_b = rows1[j]
-            if r1_b.get("is_blank_amount", False):
-                continue
 
             if abs(r1_a["amount"] - r1_b["amount"]) <= 0.01:
                 is_offset = False
@@ -995,17 +1030,13 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
 
     # ---- PASS 0: Internal self-offsets inside Sheet 2 ----
     for i in range(len(rows2)):
-        if i in intra_used2:
+        if i in intra_used2 or rows2[i].get("is_blank_amount", False):
             continue
         r2_a = rows2[i]
-        if r2_a.get("is_blank_amount", False):
-            continue
         for j in range(i + 1, len(rows2)):
-            if j in intra_used2:
+            if j in intra_used2 or rows2[j].get("is_blank_amount", False):
                 continue
             r2_b = rows2[j]
-            if r2_b.get("is_blank_amount", False):
-                continue
 
             if abs(r2_a["amount"] - r2_b["amount"]) <= 0.01:
                 is_offset = False
@@ -1026,12 +1057,13 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
                     })
                     break
 
-    matched_inter1 = set()
-    matched_inter2 = set()
     inter_sheet_matches = []
 
-    # ---- PASS 1: Direct Category & Direct Payment vs Invoice matches ----
-    direct_candidates = []
+    # ---- STEP 1: Match Same Category transactions first (Invoice vs Invoice, Payment vs Payment, etc.) ----
+    same_type_matches = []
+    matched_same1 = set()
+    matched_same2 = set()
+
     for i, r1 in enumerate(rows1):
         if i in intra_used1 or r1.get("is_blank_amount", False):
             continue
@@ -1039,72 +1071,71 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
             if j in intra_used2 or r2.get("is_blank_amount", False):
                 continue
 
-            score, basis = score_pair(r1, r2, show_date, show_ref)
-            if score >= 90:
-                match_type = ""
-                if r1["category"] == r2["category"] and r1["category"] != "Unknown":
-                    match_type = "Direct Match"
-                elif (r1["category"] == "Payment" and r2["category"] == "Invoice") or \
-                        (r1["category"] == "Invoice" and r2["category"] == "Payment"):
-                    match_type = "Direct Match"
-
-                if match_type:
-                    direct_candidates.append({
+            if r1["category"] == r2["category"] and r1["category"] != "Unknown":
+                score, basis = score_pair(r1, r2, show_date, show_ref)
+                if score >= 90:
+                    same_type_matches.append({
                         "score": score, "i": i, "j": j,
-                        "type": match_type, "basis": basis
+                        "type": "Direct Match", "basis": basis
                     })
 
-    direct_candidates = sorted(direct_candidates, key=lambda x: -x["score"])
-    for cand in direct_candidates:
-        if cand["i"] in matched_inter1 or cand["j"] in matched_inter2:
+    same_type_matches = sorted(same_type_matches, key=lambda x: -x["score"])
+    for cand in same_type_matches:
+        if cand["i"] in matched_same1 or cand["j"] in matched_same2:
             continue
-        matched_inter1.add(cand["i"])
-        matched_inter2.add(cand["j"])
+        matched_same1.add(cand["i"])
+        matched_same2.add(cand["j"])
         inter_sheet_matches.append({
             "row1": rows1[cand["i"]], "row2": rows2[cand["j"]],
-            "score": cand["score"], "type": cand["type"], "basis": "; ".join(cand["basis"])
+            "score": cand["score"], "type": "Direct Match", "basis": "; ".join(cand["basis"])
         })
 
-    # ---- PASS 2: Cross-Type absolute amount offsets ----
-    cross_candidates = []
+    # ---- STEP 2: Match Cross Offset Categories without exclusion ----
+    cross_type_matches = []
+    matched_cross1 = set()
+    matched_cross2 = set()
+
     for i, r1 in enumerate(rows1):
-        if i in intra_used1 or i in matched_inter1 or r1.get("is_blank_amount", False):
+        if i in intra_used1 or r1.get("is_blank_amount", False):
             continue
         for j, r2 in enumerate(rows2):
-            if j in intra_used2 or j in matched_inter2 or r2.get("is_blank_amount", False):
+            if j in intra_used2 or r2.get("is_blank_amount", False):
                 continue
 
-            score, basis = score_pair(r1, r2, show_date, show_ref)
-            if score >= 90:
-                label = "Cross-Type Offset"
-                cross_candidates.append({
-                    "score": score, "i": i, "j": j,
-                    "type": label, "basis": basis
-                })
+            # Multi-category offset matching rules: match any different transaction category groupings
+            valid_categories = {"Invoice", "Payment", "Credit Note", "Adjustment"}
+            if r1["category"] in valid_categories and r2["category"] in valid_categories:
+                if r1["category"] != r2["category"]:
+                    score, basis = score_pair(r1, r2, show_date, show_ref)
+                    if score >= 90:
+                        cross_type_matches.append({
+                            "score": score, "i": i, "j": j,
+                            "type": "Cross-Offset Match", "basis": basis
+                        })
 
-    cross_candidates = sorted(cross_candidates, key=lambda x: -x["score"])
-    for cand in cross_candidates:
-        if cand["i"] in matched_inter1 or cand["j"] in matched_inter2:
+    cross_type_matches = sorted(cross_type_matches, key=lambda x: -x["score"])
+    for cand in cross_type_matches:
+        if cand["i"] in matched_cross1 or cand["j"] in matched_cross2:
             continue
-        matched_inter1.add(cand["i"])
-        matched_inter2.add(cand["j"])
+        matched_cross1.add(cand["i"])
+        matched_cross2.add(cand["j"])
         inter_sheet_matches.append({
             "row1": rows1[cand["i"]], "row2": rows2[cand["j"]],
-            "score": cand["score"], "type": cand["type"], "basis": "; ".join(cand["basis"])
+            "score": cand["score"], "type": "Cross-Offset Match", "basis": "; ".join(cand["basis"])
         })
 
     # ---- PASS 3: One-to-Many Combinatorial Sum Checks ----
-    leftover1 = [i for i in range(len(rows1)) if i not in intra_used1 and i not in matched_inter1]
-    leftover2 = [j for j in range(len(rows2)) if j not in intra_used2 and j not in matched_inter2]
+    leftover1 = [i for i in range(len(rows1)) if
+                 i not in intra_used1 and i not in matched_same1 and i not in matched_cross1]
+    leftover2 = [j for j in range(len(rows2)) if
+                 j not in intra_used2 and j not in matched_same2 and j not in matched_cross2]
     advanced_matches = []
 
     for i in leftover1:
-        if i in matched_inter1:
-            continue
         r1 = rows1[i]
         if r1.get("is_blank_amount", False):
             continue
-        pool = [j for j in leftover2 if j not in matched_inter2 and not rows2[j].get("is_blank_amount", False)][:30]
+        pool = [j for j in leftover2 if not rows2[j].get("is_blank_amount", False)][:30]
 
         found = None
         for r in range(2, 4):
@@ -1117,9 +1148,9 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
                 break
 
         if found:
-            matched_inter1.add(i)
             for j in found:
-                matched_inter2.add(j)
+                if j in leftover2:
+                    leftover2.remove(j)
             advanced_matches.append({
                 "row1": r1, "rows2": [rows2[j] for j in found],
                 "score": 90,
@@ -1128,16 +1159,16 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
             })
 
     # ---- PASS 3: Many-to-One Combinatorial Sum Checks ----
-    leftover1 = [i for i in range(len(rows1)) if i not in intra_used1 and i not in matched_inter1]
-    leftover2 = [j for j in range(len(rows2)) if j not in intra_used2 and j not in matched_inter2]
+    leftover1 = [i for i in range(len(rows1)) if
+                 i not in intra_used1 and i not in matched_same1 and i not in matched_cross1]
+    leftover2 = [j for j in range(len(rows2)) if
+                 j not in intra_used2 and j not in matched_same2 and j not in matched_cross2]
 
     for j in leftover2:
-        if j in matched_inter2:
-            continue
         r2 = rows2[j]
         if r2.get("is_blank_amount", False):
             continue
-        pool = [i for i in leftover1 if i not in matched_inter1 and not rows1[i].get("is_blank_amount", False)][:30]
+        pool = [i for i in leftover1 if not rows1[i].get("is_blank_amount", False)][:30]
 
         found = None
         for r in range(2, 4):
@@ -1150,9 +1181,9 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
                 break
 
         if found:
-            matched_inter2.add(j)
             for i in found:
-                matched_inter1.add(i)
+                if i in leftover1:
+                    leftover1.remove(i)
             advanced_matches.append({
                 "row2": r2, "rows1": [rows1[i] for i in found],
                 "score": 90,
@@ -1160,15 +1191,16 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
                 "basis": "Matched sum of items"
             })
 
-    unmatched1 = [i for i in range(len(rows1)) if i not in intra_used1 and i not in matched_inter1]
-    unmatched2 = [j for j in range(len(rows2)) if j not in intra_used2 and j not in matched_inter2]
+    unmatched1 = [i for i in range(len(rows1)) if
+                  i not in intra_used1 and i not in matched_same1 and i not in matched_cross1]
+    unmatched2 = [j for j in range(len(rows2)) if
+                  j not in intra_used2 and j not in matched_same2 and j not in matched_cross2]
 
-    def separate_exceptions_and_duplicates(rows_list, unmatched_idxs):
+    def separate_exceptions_and_duplicates(rows_list, unmatched_idxs, opposite_file_name):
         """
         Groups unmatched rows. Flags a transaction as a duplicate ONLY when the
         Amount, Date, and Description fields match exactly.
-        If a mapped payment & invoice split contains blank amounts on both fields,
-        it is classified as a "Missing Payment Category" exception.
+        Applies specific exception reasons referring to the opposite missing file.
         """
         freq = {}
         for idx in unmatched_idxs:
@@ -1176,7 +1208,6 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
             if r.get("is_blank_amount", False):
                 continue
 
-            # Map exact duplication key to Amount, Date, and Description strictly!
             key = (r["amount"], r["check_date"], r["check_description"].lower().strip())
             freq[key] = freq.get(key, 0) + 1
 
@@ -1197,12 +1228,16 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
                     r_copy["exception_type"] = f"Duplicate {r['category']}"
                     duplicates.append(r_copy)
                 else:
-                    r_copy["exception_type"] = f"Missing {r['category']}"
+                    # Provide exact contextual reason missing in opposite file
+                    cat_val = r['category']
+                    if cat_val == "Unknown":
+                        cat_val = "Unclassified Transaction"
+                    r_copy["exception_type"] = f"{cat_val} missing in {opposite_file_name}"
                     exceptions.append(r_copy)
         return exceptions, duplicates
 
-    exceptions1, dupes1 = separate_exceptions_and_duplicates(rows1, unmatched1)
-    exceptions2, dupes2 = separate_exceptions_and_duplicates(rows2, unmatched2)
+    exceptions1, dupes1 = separate_exceptions_and_duplicates(rows1, unmatched1, name2)
+    exceptions2, dupes2 = separate_exceptions_and_duplicates(rows2, unmatched2, name1)
 
     return {
         "totals1": totals1, "totals2": totals2,
@@ -1213,12 +1248,477 @@ def run_reconciliation(df1_orig, df2_orig, mapping1, mapping2):
         "inter_matches": inter_sheet_matches,
         "advanced_matches": advanced_matches,
         "exceptions1": exceptions1, "exceptions2": exceptions2,
-        "dupes1": dupes1, "dupes2": dupes2
+        "dupes1": dupes1, "dupes2": dupes2,
+        "len_rows1": len(rows1),
+        "len_rows2": len(rows2)
     }
 
 
 # ==========================================================================
-# BLOCK 8: STREAMLIT RENDERS HELPERS & FILE SLOTS
+# BLOCK 8: EXCEL FILE EXPORT ENGINE
+# ==========================================================================
+def write_cell_value(cell, val):
+    """
+    Writes values as formatted numbers if they look like digits or currency blocks,
+    preserving plain text format otherwise. Resolves parenthesized formats cleanly.
+    Does not write additional trailing decimal zeros (.00) on clean integers/whole numbers.
+    """
+    if pd.isna(val):
+        cell.value = ""
+        return
+
+    val_str = str(val).strip()
+
+    # If already native float or int, write directly
+    if isinstance(val, (int, float)):
+        cell.value = val
+        if isinstance(val, int) or (isinstance(val, float) and val.is_integer()):
+            cell.number_format = '#,##0'
+        else:
+            cell.number_format = '#,##0.00'
+        return
+
+    # Clear comma and currency indicators
+    clean_str = val_str.replace("$", "").replace(",", "")
+    is_neg = False
+    if clean_str.startswith("(") and clean_str.endswith(")"):
+        clean_str = clean_str[1:-1]
+        is_neg = True
+    elif clean_str.startswith("-"):
+        clean_str = clean_str[1:]
+        is_neg = True
+
+    # Check if this string qualifies as pure float/integer digits
+    if clean_str.replace(".", "", 1).isdigit() and clean_str.count(".") <= 1:
+        try:
+            num_val = float(clean_str)
+            if is_neg:
+                num_val = -num_val
+
+            if num_val.is_integer():
+                cell.value = int(num_val)
+                if "$" in val_str:
+                    cell.number_format = '$#,##0'
+                else:
+                    cell.number_format = '#,##0'
+            else:
+                cell.value = num_val
+                if "$" in val_str:
+                    cell.number_format = '$#,##0.00'
+                else:
+                    cell.number_format = '#,##0.00'
+            return
+        except ValueError:
+            pass
+
+    cell.value = val_str
+
+
+def generate_excel_report(tables_list):
+    """
+    Generates a single, beautiful sequential Excel workbook.
+    Headers are written as non-colored bold black text.
+    Numbers are outputted as actual numeric cell values.
+    Skips any empty summary or matching tables.
+    """
+    import io
+    output = io.BytesIO()
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Reconciliation Report"
+
+        # High contrast, plain black/bold formatting for headings (No Colors)
+        title_font = Font(name='Segoe UI', size=14, bold=True, color='000000')
+        header_font = Font(name='Segoe UI', size=11, bold=True, color='000000')
+
+        current_row = 1
+        for title, df in tables_list:
+            if df is None or df.empty:
+                continue
+
+            # Write Title header as bold black text
+            ws.cell(row=current_row, column=1, value=title).font = title_font
+            current_row += 2
+
+            # Write column headers as bold black text without color background fills
+            for col_idx, col_name in enumerate(df.columns, start=1):
+                cell = ws.cell(row=current_row, column=col_idx, value=col_name)
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center')
+            current_row += 1
+
+            # Write dataframe cell values (storing numbers natively)
+            for _, row in df.iterrows():
+                for c_idx, val in enumerate(row, start=1):
+                    cell = ws.cell(row=current_row, column=c_idx)
+                    write_cell_value(cell, val)
+                current_row += 1
+
+            # Add spacer pad rows
+            current_row += 3
+
+        wb.save(output)
+    except Exception:
+        # Fallback exporter utilizing basic xlsxwriter
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            current_row = 0
+            for title, df in tables_list:
+                if df is None or df.empty:
+                    continue
+                df.to_excel(writer, sheet_name="Reconciliation Report", startrow=current_row + 1, index=False)
+                current_row += len(df) + 4
+
+    return output.getvalue()
+
+
+def build_excel_tables_tracker(R, name1, name2):
+    """
+    Sequentially compiles standard reporting dataframes for Excel download.
+    Strictly excludes the unclassified transactions report as requested.
+    """
+    tracker = []
+    show_date = R["mapping1"].get("Date") is not None and R["mapping2"].get("Date") is not None
+    show_ref = R["mapping1"].get("Reference") is not None and R["mapping2"].get("Reference") is not None
+    show_desc = R["mapping1"].get("Description") is not None and R["mapping2"].get("Description") is not None
+
+    # 1. Data Summary
+    categories_list = ["Invoice", "Payment", "Credit Note", "Adjustment", "Unknown"]
+    summary_data = []
+    for cat in categories_list:
+        total1 = R["totals1"][cat]
+        cnt1 = R["counts1"][cat]
+        total2 = R["totals2"][cat]
+        cnt2 = R["counts2"][cat]
+        diff_val = total1 - total2
+        clean_cat_lbl = "Unclassified" if cat == "Unknown" else cat
+        summary_data.append({
+            "Transaction Category": clean_cat_lbl,
+            f"{name1} Count": cnt1,
+            f"{name1} Total Amount": f"${total1:,.2f}",
+            f"{name2} Count": cnt2,
+            f"{name2} Total Amount": f"${total2:,.2f}",
+            "Count Difference": abs(cnt1 - cnt2),
+            "Absolute Difference": f"${abs(diff_val):,.2f}",
+            "Status Variance": "Perfect Align" if abs(diff_val) <= 0.01 else (
+                f"${abs(diff_val):,.2f} missing on {name2}" if diff_val > 0 else f"${abs(diff_val):,.2f} missing on {name1}")
+        })
+    tracker.append(("Data Summary", pd.DataFrame(summary_data)))
+
+    # 2. Reconciliation Results
+    n_direct = len(R["inter_matches"])
+    one_to_many_matches = [m for m in R["advanced_matches"] if "row1" in m]
+    many_to_one_matches = [m for m in R["advanced_matches"] if "row2" in m]
+    n_one_to_many = len(one_to_many_matches)
+    n_many_to_one = len(many_to_one_matches)
+    n_intra = len(R["intra1"]) + len(R["intra2"])
+    n_exceptions = len(R["exceptions1"]) + len(R["exceptions2"])
+    n_dupes = len(R["dupes1"]) + len(R["dupes2"])
+
+    matched_indices1, matched_indices2 = set(), set()
+    for m in R["inter_matches"]:
+        matched_indices1.add(m["row1"]["idx"])
+        matched_indices2.add(m["row2"]["idx"])
+    for m in R["advanced_matches"]:
+        if "row1" in m:
+            matched_indices1.add(m["row1"]["idx"])
+            for r in m["rows2"]:
+                matched_indices2.add(r["idx"])
+        else:
+            matched_indices2.add(m["row2"]["idx"])
+            for r in m["rows1"]:
+                matched_indices1.add(r["idx"])
+    for m in R["intra1"]:
+        matched_indices1.add(m["row_a"]["idx"])
+        matched_indices1.add(m["row_b"]["idx"])
+    for m in R["intra2"]:
+        matched_indices2.add(m["row_a"]["idx"])
+        matched_indices2.add(m["row_b"]["idx"])
+
+    total_unique_matched = len(matched_indices1) + len(matched_indices2)
+    total_analyzed = R["len_rows1"] + R["len_rows2"]
+    percentage_matched = (total_unique_matched / total_analyzed * 100) if total_analyzed > 0 else 0.0
+
+    results_df = pd.DataFrame([
+        {"Metric": "Total Records Analyzed in both files", "Result": str(total_analyzed)},
+        {"Metric": "Successfully Matched", "Result": str(n_direct)},
+        {"Metric": "% of Successfully Matched Transactions", "Result": f"{percentage_matched:.2f}%"},
+        {"Metric": "One-to-Many Sum Matched", "Result": str(n_one_to_many)},
+        {"Metric": "Many-to-One Sum Matched", "Result": str(n_many_to_one)},
+        {"Metric": "Intra-Sheet Offsets", "Result": str(n_intra)},
+        {"Metric": "Exceptions Unmatched", "Result": str(n_exceptions)},
+        {"Metric": "Possible Duplicates", "Result": str(n_dupes)}
+    ])
+    tracker.append(("Reconciliation Results", results_df))
+
+    # 3. Genuine Cross-Sheet Matched Transactions
+    if n_direct:
+        matched_rows = []
+        for m in R["inter_matches"]:
+            r1, r2 = m["row1"], m["row2"]
+            matched_props = ["Amount"]
+            unmatched_props = []
+
+            if show_date:
+                if pd.notna(r1["date"]) and pd.notna(r2["date"]):
+                    days = abs((r1["date"] - r2["date"]).days)
+                    matched_props.append("Date") if days == 0 else unmatched_props.append(f"Date ({days} days diff)")
+                else:
+                    unmatched_props.append("Date blank in record")
+
+            if show_ref:
+                ref1, ref2 = clean_cell_text(r1["reference"]), clean_cell_text(r2["reference"])
+                if ref1 and ref2:
+                    matched_props.append("Reference") if ref1 == ref2 else unmatched_props.append("Reference mismatch")
+                else:
+                    unmatched_props.append("Reference blank in record")
+
+            status_str = "Matched: " + ", ".join(matched_props)
+            if unmatched_props:
+                status_str += " | Unmatched: " + ", ".join(unmatched_props)
+
+            row_dict = {
+                f"{name1}: Row": r1["original_row_num"],
+                f"{name2}: Row": r2["original_row_num"],
+                f"{name1}: Transaction Type": "" if r1["category"] == "Unknown" else r1["category"],
+                f"{name2}: Transaction Type": "" if r2["category"] == "Unknown" else r2["category"],
+                f"{name1}: Amount": clean_amount_display(r1["amount"]),
+                f"{name2}: Amount": clean_amount_display(r2["amount"]),
+            }
+            if show_date:
+                row_dict[f"{name1}: Date"] = format_date_display(r1["date"])
+                row_dict[f"{name2}: Date"] = format_date_display(r2["date"])
+            if show_ref:
+                row_dict[f"{name1}: Reference"] = ref1
+                row_dict[f"{name2}: Reference"] = ref2
+            if show_desc:
+                row_dict[f"{name1}: Description"] = clean_cell_text(r1["description"])
+                row_dict[f"{name2}: Description"] = clean_cell_text(r2["description"])
+
+            row_dict["Match Type"] = m["type"]
+            row_dict["Match Score"] = m["score"]
+            row_dict["Match Status"] = status_str
+            matched_rows.append(row_dict)
+        tracker.append(("Genuine Cross-Sheet Matched Transactions", pd.DataFrame(matched_rows)))
+
+    # 4. Intra-Sheet Self-Offsets
+    if n_intra:
+        intra_rows = []
+        for m in R["intra1"]:
+            cat_a = m['row_a']['category'] if m['row_a']['category'] != 'Unknown' else 'Unclassified'
+            cat_b = m['row_b']['category'] if m['row_b']['category'] != 'Unknown' else 'Unclassified'
+            row_dict = {
+                "Statement File": name1,
+                "Offset Rows": f"Row {m['row_a']['original_row_num']} & Row {m['row_b']['original_row_num']}",
+                "Amount": clean_amount_display(m["amount"]),
+                "Reconciled Category Types": f"{cat_a} vs {cat_b}",
+                "Reconciliation Basis": m["type"],
+                "Reconciliation Status": "Matched Internally within File"
+            }
+            if show_date:
+                row_dict[
+                    "Dates"] = f"{format_date_display(m['row_a']['date'])}, {format_date_display(m['row_b']['date'])}".strip(
+                    ", —")
+            if show_ref:
+                row_dict[
+                    "References"] = f"{clean_cell_text(m['row_a']['reference'])}, {clean_cell_text(m['row_b']['reference'])}".strip(
+                    ", ")
+            intra_rows.append(row_dict)
+
+        for m in R["intra2"]:
+            cat_a = m['row_a']['category'] if m['row_a']['category'] != 'Unknown' else 'Unclassified'
+            cat_b = m['row_b']['category'] if m['row_b']['category'] != 'Unknown' else 'Unclassified'
+            row_dict = {
+                "Statement File": name2,
+                "Offset Rows": f"Row {m['row_a']['original_row_num']} & Row {m['row_b']['original_row_num']}",
+                "Amount": clean_amount_display(m["amount"]),
+                "Reconciled Category Types": f"{cat_a} vs {cat_b}",
+                "Reconciliation Basis": m["type"],
+                "Reconciliation Status": "Matched Internally within File"
+            }
+            if show_date:
+                row_dict[
+                    "Dates"] = f"{format_date_display(m['row_a']['date'])}, {format_date_display(m['row_b']['date'])}".strip(
+                    ", —")
+            if show_ref:
+                row_dict[
+                    "References"] = f"{clean_cell_text(m['row_a']['reference'])}, {clean_cell_text(m['row_b']['reference'])}".strip(
+                    ", ")
+            intra_rows.append(row_dict)
+        tracker.append(("Intra-Sheet Self-Offsets (Internal Adjustments)", pd.DataFrame(intra_rows)))
+
+    # 5. Split Payments (One-to-Many)
+    if n_one_to_many:
+        otm_rows = []
+        for m in one_to_many_matches:
+            r1, rows2 = m["row1"], m["rows2"]
+            r2_idxs = ", ".join(str(r["original_row_num"]) for r in rows2)
+            r2_types = ", ".join(r["category"] for r in rows2 if r["category"] != "Unknown")
+            r2_refs = ", ".join(clean_cell_text(r["reference"]) for r in rows2 if clean_cell_text(r["reference"]))
+            r2_amts = sum(r["amount"] for r in rows2)
+            r2_dates = ", ".join(format_date_display(r["date"]) for r in rows2 if pd.notna(r["date"]))
+            r2_descs = ", ".join(clean_cell_text(r["description"]) for r in rows2 if clean_cell_text(r["description"]))
+            row_dict = {
+                f"{name1}: Row": r1["original_row_num"],
+                f"{name2}: Row(s)": r2_idxs,
+                f"{name1}: Transaction Type": "" if r1["category"] == "Unknown" else r1["category"],
+                f"{name2}: Transaction Type(s)": r2_types,
+                f"{name1}: Amount": clean_amount_display(r1["amount"]),
+                f"{name2}: Amount (Sum)": clean_amount_display(r2_amts),
+            }
+            if show_date:
+                row_dict[f"{name1}: Date"] = format_date_display(r1["date"])
+                row_dict[f"{name2}: Date(s)"] = r2_dates
+            if show_ref:
+                row_dict[f"{name1}: Reference"] = clean_cell_text(r1["reference"])
+                row_dict[f"{name2}: Reference(s)"] = r2_refs
+            if show_desc:
+                row_dict[f"{name1}: Description"] = clean_cell_text(r1["description"])
+                row_dict[f"{name2}: Description(s)"] = r2_descs
+            row_dict["Match Type"] = m["type"]
+            row_dict["Match Score"] = m["score"]
+            row_dict["Match Status"] = "Matched: Amount (Sum) | Individual references or dates differ across items"
+            otm_rows.append(row_dict)
+        tracker.append(("Split Payments (One-to-Many Ledger Reconciliation)", pd.DataFrame(otm_rows)))
+
+    # 6. Combined Payments (Many-to-One)
+    if n_many_to_one:
+        mto_rows = []
+        for m in many_to_one_matches:
+            r2, rows1 = m["row2"], m["rows1"]
+            r1_idxs = ", ".join(str(r["original_row_num"]) for r in rows1)
+            r1_types = ", ".join(r["category"] for r in rows1 if r["category"] != "Unknown")
+            r1_refs = ", ".join(clean_cell_text(r["reference"]) for r in rows1 if clean_cell_text(r["reference"]))
+            r1_amts = sum(r["amount"] for r in rows1)
+            r1_dates = ", ".join(format_date_display(r["date"]) for r in rows1 if pd.notna(r["date"]))
+            r1_descs = ", ".join(clean_cell_text(r["description"]) for r in rows1 if clean_cell_text(r["description"]))
+            row_dict = {
+                f"{name1}: Row(s)": r1_idxs,
+                f"{name2}: Row": r2["original_row_num"],
+                f"{name1}: Transaction Type(s)": r1_types,
+                f"{name2}: Transaction Type": "" if r2["category"] == "Unknown" else r2["category"],
+                f"{name1}: Amount (Sum)": clean_amount_display(r1_amts),
+                f"{name2}: Amount": clean_amount_display(r2["amount"]),
+            }
+            if show_date:
+                row_dict[f"{name1}: Date(s)"] = r1_dates
+                row_dict[f"{name2}: Date"] = format_date_display(r2["date"])
+            if show_ref:
+                row_dict[f"{name1}: Reference(s)"] = r1_refs
+                row_dict[f"{name2}: Reference"] = clean_cell_text(r2["reference"])
+            if show_desc:
+                row_dict[f"{name1}: Description(s)"] = r1_descs
+                row_dict[f"{name2}: Description"] = clean_cell_text(r2["description"])
+            row_dict["Match Type"] = m["type"]
+            row_dict["Match Score"] = m["score"]
+            row_dict["Match Status"] = "Matched: Amount (Sum) | Individual references or dates differ across items"
+            mto_rows.append(row_dict)
+        tracker.append(("Combined Payments (Many-to-One Ledger Reconciliation)", pd.DataFrame(mto_rows)))
+
+    # 7. Potential Duplicate Entries
+    if n_dupes:
+        dup_rows = []
+        for dup in R["dupes1"]:
+            dup_rows.append({
+                "Source Statement": name1, "Row": dup["original_row_num"],
+                "Amount": clean_cell_text(dup["orig_amount"]) if dup["orig_amount"] else "—",
+                "Date": dup["orig_date"] if dup["orig_date"] else "—",
+                "Description": dup["orig_desc"] if dup["orig_desc"] else "—",
+                "Reference": clean_cell_text(dup["orig_ref"]) if show_ref else "—",
+                "Category Type": "" if dup["category"] == "Unknown" else dup["category"],
+                "Duplicate Category": dup["exception_type"],
+                "_sort_amount": dup["amount"], "_sort_date": dup["check_date"],
+                "_sort_desc": dup["check_description"].lower().strip()
+            })
+        for dup in R["dupes2"]:
+            dup_rows.append({
+                "Source Statement": name2, "Row": dup["original_row_num"],
+                "Amount": clean_cell_text(dup["orig_amount"]) if dup["orig_amount"] else "—",
+                "Date": dup["orig_date"] if dup["orig_date"] else "—",
+                "Description": dup["orig_desc"] if dup["orig_desc"] else "—",
+                "Reference": clean_cell_text(dup["orig_ref"]) if show_ref else "—",
+                "Category Type": "" if dup["category"] == "Unknown" else dup["category"],
+                "Duplicate Category": dup["exception_type"],
+                "_sort_amount": dup["amount"], "_sort_date": dup["check_date"],
+                "_sort_desc": dup["check_description"].lower().strip()
+            })
+        dup_df = pd.DataFrame(dup_rows)
+        dup_df = dup_df.sort_values(by=["_sort_amount", "_sort_date", "_sort_desc", "Source Statement"],
+                                    ascending=[True, True, True, True])
+        dup_df = dup_df.drop(columns=["_sort_amount", "_sort_date", "_sort_desc"])
+        tracker.append(("Potential Duplicate Entries", dup_df))
+
+    # 7.5 EXCEPTION SUMMARY (Added to Excel Trackers)
+    if n_exceptions:
+        exc_summary = {
+            "Missing Invoices": 0, "Missing Payments": 0, "Missing Credit Notes": 0, "Missing Adjustments": 0
+        }
+        for exc in R["exceptions1"] + R["exceptions2"]:
+            cat = exc["category"]
+            if cat == "Invoice":
+                exc_summary["Missing Invoices"] += 1
+            elif cat == "Payment":
+                exc_summary["Missing Payments"] += 1
+            elif cat == "Credit Note":
+                exc_summary["Missing Credit Notes"] += 1
+            elif cat == "Adjustment":
+                exc_summary["Missing Adjustments"] += 1
+
+        exc_summary_df = pd.DataFrame([
+            {"Issue": "Missing Invoices", "Records": exc_summary["Missing Invoices"]},
+            {"Issue": "Missing Payments", "Records": exc_summary["Missing Payments"]},
+            {"Issue": "Missing Credit Notes", "Records": exc_summary["Missing Credit Notes"]},
+            {"Issue": "Missing Adjustments", "Records": exc_summary["Missing Adjustments"]}
+        ])
+        tracker.append(("Exception Summary", exc_summary_df))
+
+    # 8. Exceptions & Unmatched Report
+    if n_exceptions:
+        unmatched_rows = []
+        for exc in R["exceptions1"]:
+            row_dict = {
+                "Source Statement": name1, "Row": exc["original_row_num"],
+                "Amount": clean_cell_text(exc["orig_amount"]) if exc["orig_amount"] else "—",
+            }
+            if show_date:
+                row_dict["Date"] = clean_cell_text(exc["orig_date"]) if exc["orig_date"] else "—"
+            if show_ref:
+                row_dict["Reference"] = clean_cell_text(exc["orig_ref"]) if exc["orig_ref"] else "—"
+            row_dict.update({
+                "Category Type": "" if exc["category"] == "Unknown" else exc["category"],
+                "Description Context": clean_cell_text(exc["orig_desc"]) if exc["orig_desc"] else "—",
+                "Exception Category": exc["exception_type"]
+            })
+            unmatched_rows.append(row_dict)
+        for exc in R["exceptions2"]:
+            row_dict = {
+                "Source Statement": name2, "Row": exc["original_row_num"],
+                "Amount": clean_cell_text(exc["orig_amount"]) if exc["orig_amount"] else "—",
+            }
+            if show_date:
+                row_dict["Date"] = clean_cell_text(exc["orig_date"]) if exc["orig_date"] else "—"
+            if show_ref:
+                row_dict["Reference"] = clean_cell_text(exc["orig_ref"]) if exc["orig_ref"] else "—"
+            row_dict.update({
+                "Category Type": "" if exc["category"] == "Unknown" else exc["category"],
+                "Description Context": clean_cell_text(exc["orig_desc"]) if exc["orig_desc"] else "—",
+                "Exception Category": exc["exception_type"]
+            })
+            unmatched_rows.append(row_dict)
+        exceptions_df = pd.DataFrame(unmatched_rows)
+        exceptions_df["_sort_amount"] = exceptions_df["Amount"].apply(lambda x: parse_amount(x))
+        exceptions_df = exceptions_df.sort_values(by=["_sort_amount", "Source Statement"], ascending=[True, True])
+        exceptions_df = exceptions_df.drop(columns=["_sort_amount"])
+        tracker.append(("Exceptions & Unmatched Report", exceptions_df))
+
+    return tracker
+
+
+# ==========================================================================
+# BLOCK 9: STREAMLIT RENDERING HELPERS & FILE SLOTS
 # ==========================================================================
 def render_upload_slot(col, slot: int):
     name_key = f"file{slot}_name"
@@ -1262,9 +1762,8 @@ def render_upload_slot(col, slot: int):
 
 
 # ==========================================================================
-# BLOCK 9: STREAMLIT UI ROUTING, MAPPING TABLE & DETAILED REPORTS
+# BLOCK 10: STREAMLIT UI ROUTING, MAPPING TABLE & DETAILED REPORTS
 # ==========================================================================
-# Display Dynamic Application Title Header Exactly
 st.markdown(
     """
     <div class="app-header">
@@ -1291,10 +1790,25 @@ with proc_col:
     with p_c:
         process_clicked = st.button(
             "Process Data",
-            disabled=not (file1_ready & file2_ready),
+            disabled=not (file1_ready and file2_ready),
             type="primary",
             use_container_width=True,
         )
+
+        # If reconciled, render the high-contrast Download as Excel button right below the Process button as requested
+        if st.session_state.reconciled and st.session_state.recon_results is not None:
+            st.write("")  # Margin spacer
+            excel_data_bytes = st.session_state.recon_results.get("excel_bytes", b"")
+            if excel_data_bytes:
+                st.download_button(
+                    label="📥 Download as Excel",
+                    data=excel_data_bytes,
+                    file_name="Financial_Reconciliation_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="top_excel_download"
+                )
+
     if not (file1_ready and file2_ready):
         st.markdown(
             "<div style='text-align:center; font-size:0.82rem; color:#4b5563; font-weight: 500;'>Upload both statements to begin processing.</div>",
@@ -1331,7 +1845,7 @@ if process_clicked and file1_ready and file2_ready:
     else:
         st.session_state.processed = False
 
-# Column Mapping Screen (COMPACT MODERATE DESIGN WITH ONLY AMOUNT AUTO-MAPPED)
+# Column Mapping Screen
 if (
         st.session_state.processed
         and st.session_state.df1 is not None
@@ -1348,7 +1862,6 @@ if (
     options1 = [BLANK_OPTION] + cols1
     options2 = [BLANK_OPTION] + cols2
 
-    # Amount auto-detect
     auto_amt1 = auto_detect_column(cols1, "Amount")
     auto_amt2 = auto_detect_column(cols2, "Amount")
 
@@ -1358,10 +1871,8 @@ if (
         "All supporting columns default to unmapped unless selected."
     )
 
-    # Moderate Beautiful Card Wrapper
     st.markdown('<div class="mapping-card">', unsafe_allow_html=True)
 
-    # Header Grid
     g_hdr_lbl, g_hdr_1, g_hdr_2 = st.columns([1.2, 2, 2])
     with g_hdr_lbl:
         st.markdown('<div style="font-weight:800; color:#1e3a8a; font-size:1.05rem;">Field Name</div>',
@@ -1389,7 +1900,6 @@ if (
             idx1 = options1.index(auto_amt1) if auto_amt1 in options1 else 0
             idx2 = options2.index(auto_amt2) if auto_amt2 in options2 else 0
         else:
-            # Strictly default to blank / — Select — (index 0)
             idx1 = 0
             idx2 = 0
 
@@ -1402,7 +1912,6 @@ if (
                 f"sel2_{field}", options2, index=idx2, key=f"map2_{field}", label_visibility="collapsed"
             )
 
-        # Render explicit mapping instructions below the Amount 2 field as requested
         if field == "Amount 2":
             st.markdown(
                 "<span style='font-size:0.78rem; color:#2563eb; font-weight:500; display:block; margin-top:-0.5rem; margin-bottom:0.5rem;'>"
@@ -1415,7 +1924,6 @@ if (
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Let the app execute if either the main Amount or secondary Amount 2 are mapped on both sides
     amount_ok = (
             (selections1["Amount"] != BLANK_OPTION or selections1["Amount 2"] != BLANK_OPTION)
             and (selections2["Amount"] != BLANK_OPTION or selections2["Amount 2"] != BLANK_OPTION)
@@ -1441,9 +1949,14 @@ if (
         mapping1 = {f: (selections1[f] if selections1[f] != BLANK_OPTION else None) for f in FIXED_FIELDS}
         mapping2 = {f: (selections2[f] if selections2[f] != BLANK_OPTION else None) for f in FIXED_FIELDS}
         with st.spinner("Analyzing rules & classifying balances..."):
-            results = run_reconciliation(df1, df2, mapping1, mapping2)
+            results = run_reconciliation(df1, df2, mapping1, mapping2, name1, name2)
             results["mapping1"] = mapping1
             results["mapping2"] = mapping2
+
+            # Pre-generate the structured Excel file bytes, excluding any unclassified reports
+            excel_tables_tracker = build_excel_tables_tracker(results, name1, name2)
+            results["excel_bytes"] = generate_excel_report(excel_tables_tracker)
+
         st.session_state.recon_results = results
         st.session_state.reconciled = True
         st.rerun()
@@ -1479,7 +1992,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     for u in R["unclassified1"]:
         raw_t = u["raw_type"]
         if is_blank_value(raw_t) or str(raw_t).strip() == "" or str(raw_t).strip().lower() in (
-        "nan", "none", "transection type is missing"):
+                "nan", "none", "transection type is missing"):
             raw_t_display = "Transection type is missing"
             reason = "Missing transection type"
         else:
@@ -1498,7 +2011,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     for u in R["unclassified2"]:
         raw_t = u["raw_type"]
         if is_blank_value(raw_t) or str(raw_t).strip() == "" or str(raw_t).strip().lower() in (
-        "nan", "none", "transection type is missing"):
+                "nan", "none", "transection type is missing"):
             raw_t_display = "Transection type is missing"
             reason = "Missing transection type"
         else:
@@ -1521,8 +2034,8 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
                 "The following transaction records didn't mention or match any target category keywords, so they were excluded from core background balance computations:")
             st.dataframe(pd.DataFrame(unclassified_rows), use_container_width=True, hide_index=True)
 
-    # ---- 2. Initial Transaction Category Summary Dashboard ----
-    st.markdown('<div class="section-title">🔍 Initial Transaction Category Summary</div>', unsafe_allow_html=True)
+    # ---- 2. Data Summary (Initial Transaction Category Summary) ----
+    st.markdown('<div class="section-title">🔍 Data Summary</div>', unsafe_allow_html=True)
 
     categories_list = ["Invoice", "Payment", "Credit Note", "Adjustment", "Unknown"]
     summary_data = []
@@ -1543,12 +2056,14 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
             f"{name1} Total Amount": f"${total1:,.2f}",
             f"{name2} Count": cnt2,
             f"{name2} Total Amount": f"${total2:,.2f}",
+            "Count Difference": abs(cnt1 - cnt2),
             "Absolute Difference": f"${abs(diff_val):,.2f}",
             "Status Variance": f"Perfect Align" if abs(diff_val) <= 0.01 else (
                 f"${abs(diff_val):,.2f} missing on {name2}" if diff_val > 0 else f"${abs(diff_val):,.2f} missing on {name1}")
         })
 
-    st.dataframe(pd.DataFrame(summary_data), use_container_width=True, hide_index=True)
+    summary_df = pd.DataFrame(summary_data)
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     # Immediate Alert notifications
     alerts = []
@@ -1568,8 +2083,9 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     one_to_many_matches = [m for m in R["advanced_matches"] if "row1" in m]
     many_to_one_matches = [m for m in R["advanced_matches"] if "row2" in m]
 
-    # Summary Badges
-    st.write("")
+    # ---- 3. Reconciliation Results Table Layout ----
+    st.markdown('<div class="section-title">📊 Reconciliation Results</div>', unsafe_allow_html=True)
+
     n_direct = len(R["inter_matches"])
     n_one_to_many = len(one_to_many_matches)
     n_many_to_one = len(many_to_one_matches)
@@ -1577,20 +2093,44 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     n_exceptions = len(R["exceptions1"]) + len(R["exceptions2"])
     n_dupes = len(R["dupes1"]) + len(R["dupes2"])
 
-    s1, s2, s3, s4, s5, s6 = st.columns(6)
-    for col, num, lbl in [
-        (s1, n_direct, "Cross-Sheet Matched"),
-        (s2, n_one_to_many, "One-to-Many Sum Matched"),
-        (s3, n_many_to_one, "Many-to-One Sum Matched"),
-        (s4, n_intra, "Intra-Sheet Offsets"),
-        (s5, n_exceptions, "Exceptions Unmatched"),
-        (s6, n_dupes, "Possible Duplicates"),
-    ]:
-        with col:
-            st.markdown(
-                f'<div class="recon-summary-card"><div class="num">{num}</div><div class="lbl">{lbl}</div></div>',
-                unsafe_allow_html=True,
-            )
+    # Mathematically exact calculation of individual records successfully matched
+    matched_indices1 = set()
+    matched_indices2 = set()
+    for m in R["inter_matches"]:
+        matched_indices1.add(m["row1"]["idx"])
+        matched_indices2.add(m["row2"]["idx"])
+    for m in R["advanced_matches"]:
+        if "row1" in m:
+            matched_indices1.add(m["row1"]["idx"])
+            for r in m["rows2"]:
+                matched_indices2.add(r["idx"])
+        else:
+            matched_indices2.add(m["row2"]["idx"])
+            for r in m["rows1"]:
+                matched_indices1.add(r["idx"])
+    for m in R["intra1"]:
+        matched_indices1.add(m["row_a"]["idx"])
+        matched_indices1.add(m["row_b"]["idx"])
+    for m in R["intra2"]:
+        matched_indices2.add(m["row_a"]["idx"])
+        matched_indices2.add(m["row_b"]["idx"])
+
+    total_unique_matched = len(matched_indices1) + len(matched_indices2)
+    total_analyzed = R["len_rows1"] + R["len_rows2"]
+    percentage_matched = (total_unique_matched / total_analyzed * 100) if total_analyzed > 0 else 0.0
+
+    # Build robust results Dataframe aligning with user specified rows
+    results_df = pd.DataFrame([
+        {"Metric": "Total Records Analyzed in both files", "Result": str(total_analyzed)},
+        {"Metric": "Successfully Matched", "Result": str(n_direct)},
+        {"Metric": "% of Successfully Matched Transactions", "Result": f"{percentage_matched:.2f}%"},
+        {"Metric": "One-to-Many Sum Matched", "Result": str(n_one_to_many)},
+        {"Metric": "Many-to-One Sum Matched", "Result": str(n_many_to_one)},
+        {"Metric": "Intra-Sheet Offsets", "Result": str(n_intra)},
+        {"Metric": "Exceptions Unmatched", "Result": str(n_exceptions)},
+        {"Metric": "Possible Duplicates", "Result": str(n_dupes)}
+    ])
+    st.dataframe(results_df, use_container_width=True, hide_index=True)
 
     st.write("")
 
@@ -1599,7 +2139,7 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     show_ref = R["mapping1"].get("Reference") is not None and R["mapping2"].get("Reference") is not None
     show_desc = R["mapping1"].get("Description") is not None and R["mapping2"].get("Description") is not None
 
-    # ---- 3. Standard Cross-Sheet Matched Transactions (Direct and Cross-Type) ----
+    # ---- 4. Standard Cross-Sheet Matched Transactions (Direct and Cross-Type) ----
     st.markdown('<div class="section-title">✅ Genuine Cross-Sheet Matched Transactions</div>', unsafe_allow_html=True)
     st.caption(
         "Matches containing direct categorizations or adjustments that matched directly across statement files. Every matched row is guaranteed to have amount and row values for both statements.")
@@ -1884,7 +2424,37 @@ if st.session_state.reconciled and st.session_state.recon_results is not None:
     else:
         st.caption("No duplicate values detected within either statement.")
 
-    # ---- 8. Exceptions Report ----
+    # ---- 7.5 EXCEPTION SUMMARY REPORT (NEW) ----
+    if n_exceptions:
+        st.markdown('<div class="section-title">📋 Exception Summary</div>', unsafe_allow_html=True)
+        st.caption("A high-level count of records missing across your comparison.")
+
+        exc_summary = {
+            "Missing Invoices": 0,
+            "Missing Payments": 0,
+            "Missing Credit Notes": 0,
+            "Missing Adjustments": 0
+        }
+        for exc in R["exceptions1"] + R["exceptions2"]:
+            cat = exc["category"]
+            if cat == "Invoice":
+                exc_summary["Missing Invoices"] += 1
+            elif cat == "Payment":
+                exc_summary["Missing Payments"] += 1
+            elif cat == "Credit Note":
+                exc_summary["Missing Credit Notes"] += 1
+            elif cat == "Adjustment":
+                exc_summary["Missing Adjustments"] += 1
+
+        exc_summary_df = pd.DataFrame([
+            {"Issue": "Missing Invoices", "Records": exc_summary["Missing Invoices"]},
+            {"Issue": "Missing Payments", "Records": exc_summary["Missing Payments"]},
+            {"Issue": "Missing Credit Notes", "Records": exc_summary["Missing Credit Notes"]},
+            {"Issue": "Missing Adjustments", "Records": exc_summary["Missing Adjustments"]}
+        ])
+        st.dataframe(exc_summary_df, use_container_width=True, hide_index=True)
+
+    # ---- 8. Exceptions Report (Updated with Source Context) ----
     st.markdown('<div class="section-title">⚠️ Exceptions & Unmatched Report</div>', unsafe_allow_html=True)
     st.caption(
         "Transactions that failed to match on amounts, are completely omitted from statements, or have no defined amounts.")
